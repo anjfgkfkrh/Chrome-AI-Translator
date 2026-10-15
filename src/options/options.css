@@ -1,0 +1,78 @@
+/* 꾸밈 없는 기본 스타일. 라이트/다크는 시스템 설정을 따른다 (SPEC 13장). */
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --muted: #59636e;
+  --success: #1a7f37;
+  --error: #d1242f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --muted: #9198a1;
+    --success: #3fb950;
+    --error: #f85149;
+  }
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin-top: 2rem;
+  font-size: 1.125rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.row + label {
+  margin-top: 1rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+}
+
+#status {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--muted);
+}
+
+#status[data-kind="success"] {
+  color: var(--success);
+}
+
+#status[data-kind="error"] {
+  color: var(--error);
+}
+
+.note {
+  margin-top: 1.5rem;
+  color: var(--muted);
+}

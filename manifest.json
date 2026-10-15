@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "AITranslator",
+  "version": "0.1.0",
+  "description": "Claude로 웹 페이지를 한국어로 번역합니다.",
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "host_permissions": ["https://api.anthropic.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "AITranslator",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "toggle-translation": {
+      "suggested_key": { "default": "Alt+T", "mac": "Alt+T" },
+      "description": "번역 / 원문 보기 전환"
+    }
+  }
+}

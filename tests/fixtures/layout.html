@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: docs layout</title>
+    <style>
+      header nav { display: flex; gap: 1rem; }
+      .menu { display: flex; gap: 1rem; list-style: none; padding: 0; }
+      .badge { display: inline-flex; padding: 0 0.25rem; border: 1px solid; }
+    </style>
+  </head>
+  <body class="docs">
+    <div class="banner" role="region" aria-label="Announcement">
+      <span>New: Deep Agents is now available.</span>
+      <button type="button" class="banner-close" aria-label="Close banner">Dismiss</button>
+    </div>
+
+    <header>
+      <a class="logo" href="/"><svg width="16" height="16" aria-hidden="true"><title>Logo</title><circle cx="8" cy="8" r="8" /></svg> Docs</a>
+      <nav aria-label="Main">
+        <a href="/oss">Open source</a>
+        <a href="/platform">Platform</a>
+        <a href="/pricing">Pricing</a>
+      </nav>
+      <button type="button" id="search" data-shortcut="⌘K">Search <kbd>⌘K</kbd></button>
+    </header>
+
+    <aside>
+      <ul class="menu">
+        <li><a href="/get-started">Get started</a></li>
+        <li><a href="/concepts">Concepts</a></li>
+      </ul>
+      <ul class="inline-list">
+        <li style="display: inline">Python</li>
+        <li style="display: inline">JavaScript</li>
+      </ul>
+    </aside>
+
+    <main>
+      <h1 id="title">Build reliable agents</h1>
+      <p>LangGraph gives you <strong>low-level control</strong> over <em>agent workflows</em>, with built-in <a href="/persistence">persistence</a>.<br />Start in minutes.</p>
+      <p translate="no">Do not translate this paragraph, <span translate="yes">but translate this part</span>.</p>
+      <p class="notranslate">This stays in English <span translate="yes">even here</span>.</p>
+      <pre><code>pip install -U langgraph</code></pre>
+      <p>Run <code>langgraph dev</code> to start the server, then open <a href="http://localhost:2024">http://localhost:2024</a>.</p>
+
+      <table>
+        <caption>Supported models</caption>
+        <thead>
+          <tr><th>Provider</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Anthropic</td><td>Generally available</td></tr>
+          <tr><td>OpenAI</td><td>Beta <span class="badge">New</span></td></tr>
+        </tbody>
+      </table>
+
+      <details>
+        <summary>Show advanced options</summary>
+        <p>Advanced options let you tune retries.</p>
+      </details>
+      <blockquote>Agents are only as good as their context.</blockquote>
+      <figure>
+        <img src="data:," alt="Architecture diagram" />
+        <figcaption>Figure 1: System architecture</figcaption>
+      </figure>
+
+      <form action="/subscribe" onsubmit="return false">
+        <label for="email">Email address</label>
+        <input id="email" type="email" placeholder="you@example.com" />
+        <label for="password">Password</label>
+        <input id="password" type="password" />
+        <select name="plan"><option>Free plan</option><option>Pro plan</option></select>
+        <textarea name="note">Leave a note</textarea>
+        <button type="submit">Subscribe now</button>
+      </form>
+
+      <div contenteditable="true">Editable draft text</div>
+      <div hidden>Hidden menu item</div>
+      <p>Version <span>v1.2.3</span> released on October 15.</p>
+      <p lang="ko">한국어 문서도 있습니다.</p>
+      <p id="counter-row">Clicked <span id="count">0</span> times <button type="button" id="counter">Click me</button></p>
+
+      <iframe srcdoc="<p>Inside frame</p>" title="Embedded example"></iframe>
+      <math><mi>x</mi><mo>=</mo><mn>1</mn></math>
+      <canvas width="10" height="10">Canvas fallback text</canvas>
+      <noscript>Please enable JavaScript.</noscript>
+      <template><p>Template text</p></template>
+    </main>
+
+    <footer>
+      <p>&copy; 2026 Example Inc. All rights reserved.</p>
+      <p>Questions? Email <a href="mailto:help@example.com">help@example.com</a>.</p>
+    </footer>
+
+    <script>
+      document.getElementById("counter").addEventListener("click", () => {
+        const count = document.getElementById("count");
+        count.textContent = String(Number(count.textContent) + 1);
+      });
+      document.querySelector(".banner-close").addEventListener("click", () => {
+        document.querySelector(".banner").hidden = true;
+      });
+    </script>
+  </body>
+</html>

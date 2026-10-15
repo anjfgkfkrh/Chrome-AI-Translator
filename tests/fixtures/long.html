@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: long page</title>
+  </head>
+  <body>
+    <main id="main"></main>
+    <script>
+      // 보이는 영역 우선(SPEC 4.5) 확인용 긴 문서: 문단 150개 → 요청 2번(세그먼트 100개마다)
+      const main = document.getElementById("main");
+      for (let i = 1; i <= 150; i++) {
+        const paragraph = document.createElement("p");
+        paragraph.id = `p${i}`;
+        paragraph.textContent = `Paragraph number ${i} of a long article.`;
+        main.append(paragraph);
+      }
+    </script>
+  </body>
+</html>

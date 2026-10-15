@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>AITranslator</title>
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>AITranslator</h1>
+      <p id="status" role="status" hidden></p>
+      <p id="detail" hidden></p>
+      <div class="row">
+        <button id="action" type="button" hidden>번역</button>
+        <button id="open-settings" type="button" hidden>설정 열기</button>
+      </div>
+      <footer>
+        <a id="settings-link" href="#">설정</a>
+        <span id="shortcut"></span>
+      </footer>
+    </main>
+  </body>
+</html>
