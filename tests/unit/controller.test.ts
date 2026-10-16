@@ -410,6 +410,27 @@ describe("이 품질로 다시 번역 (SPEC 13장)", () => {
 
     expect(ports).toHaveLength(1);
   });
+
+  it("다시 번역의 요청에만 retranslate를 붙인다. 그 뒤 화면이 바뀌어 더 번역하는 요청에는 붙이지 않는다", async () => {
+    document.body.innerHTML = "<p>One</p>";
+    const controller = newController();
+    const first = controller.translate();
+    expect(ports[0]!.posted[0]).toMatchObject({ type: "translate", retranslate: false });
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await first;
+
+    await controller.retranslate();
+    expect(ports[1]!.posted[0]).toMatchObject({ type: "translate", newTurn: true, retranslate: true });
+    ports[1]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[1]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(controller.state().status).toBe("translated"));
+
+    document.body.insertAdjacentHTML("beforeend", "<p>Arrived later</p>");
+
+    await vi.waitFor(() => expect(ports).toHaveLength(3), { timeout: 2_000 });
+    expect(ports[2]!.posted[0]).toMatchObject({ type: "translate", newTurn: false, retranslate: false });
+  });
 });
 
 describe("최근 번역 기록 정보 (SPEC 13장 \"기록의 한 건\")", () => {

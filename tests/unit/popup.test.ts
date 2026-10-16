@@ -307,6 +307,39 @@ describe("팝업: 번역 품질 (SPEC 13장 \"번역 품질을 고르는 곳\")"
     expect(retranslate().hidden).toBe(true);
   });
 
+  it("직접 입력한 모델이면 품질을 바꾸지 않아도 번역된 페이지에서 \"이 품질로 다시 번역\"이 보인다 (SPEC 13장)", async () => {
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, models: { anthropic: "claude-custom-1" } };
+    tabState = translated;
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(retranslate().hidden).toBe(false));
+    retranslate().click();
+    await vi.waitFor(() =>
+      expect(sent("tab-action")).toEqual([{ type: "tab-action", tabId: 7, action: "retranslate" }]),
+    );
+  });
+
+  it("직접 입력한 모델이어도 아직 번역하지 않은 페이지에서는 보이지 않는다", async () => {
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, models: { anthropic: "claude-custom-1" } };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#action")?.hidden).toBe(false));
+    expect(retranslate().hidden).toBe(true);
+  });
+
+  it("목록에 있는 모델의 \"직접 설정\"(Opus 빠르게)은 지금처럼 품질을 바꿨을 때만 보인다", async () => {
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, models: { anthropic: "claude-opus-5-5" }, translationMode: "fast" };
+    tabState = translated;
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("번역 완료"));
+    expect(quality().value).toBe("custom");
+    expect(retranslate().hidden).toBe(true);
+  });
+
   it("키가 없으면 번역 품질을 보여 주지 않는다", async () => {
     chromeMock.storage.settings = {};
 

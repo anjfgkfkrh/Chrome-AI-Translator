@@ -282,7 +282,7 @@ test.describe("캐시 정리 (SPEC 13장)", () => {
     // 정리 기준을 낮추고(상한의 10% ≈ 0.8MB, 1턴), 아직 한 번도 쓰이지 않은 번역문을 약 1MB 넣어 둔다.
     await serviceWorker.evaluate(async () => {
       const stale: Record<string, unknown> = {};
-      for (let i = 0; i < 1000; i++) stale[`t:stale${i}`] = { s: ["오래된 번역문".repeat(50)], u: 0 };
+      for (let i = 0; i < 1000; i++) stale[`c:stale${i}`] = { s: ["오래된 번역문".repeat(50)], u: 0 };
       await chrome.storage.local.set({
         ...stale,
         settings: { apiKeys: { anthropic: "sk-ant-e2e" }, cacheCleanupPercent: 10, cacheIdleTurns: 1 },
@@ -296,11 +296,11 @@ test.describe("캐시 정리 (SPEC 13장)", () => {
     await expect
       .poll(async () => {
         const storage = await readStorage(serviceWorker);
-        const keys = Object.keys(storage).filter((key) => key.startsWith("t:"));
+        const keys = Object.keys(storage).filter((key) => key.startsWith("c:"));
         return {
           turn: storage.cacheTurn,
-          stale: keys.filter((key) => key.startsWith("t:stale")).length,
-          fresh: keys.filter((key) => !key.startsWith("t:stale")).length,
+          stale: keys.filter((key) => key.startsWith("c:stale")).length,
+          fresh: keys.filter((key) => !key.startsWith("c:stale")).length,
         };
       })
       .toEqual({ turn: 1, stale: 0, fresh: 5 });

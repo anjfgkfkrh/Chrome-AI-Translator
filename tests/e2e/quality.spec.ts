@@ -7,6 +7,7 @@ import { apiCalls, mockTranslationApi, openPopup, readStorage, storeApiKey, tabI
 const FIXTURE_ORIGIN = "http://aitranslator.test";
 const FIXTURES_DIR = path.resolve(import.meta.dirname, "../fixtures");
 const SENTENCES = `${FIXTURE_ORIGIN}/sentences.html`;
+const HAIKU = "Haiku5.5-medium(기본) — 빠르고 저렴함";
 const SONNET = "Sonnet5.5-medium(정확하게) — 더 자연스러움, 비용 약 20배";
 
 test.use({ extensionPath: TEST_EXTENSION_PATH });
@@ -73,4 +74,69 @@ test("팝업: 번역된 페이지에서 품질을 바꾸고 \"이 품질로 다�
   await expect(page.locator("#start")).toHaveText("GET STARTED");
   const models = (await apiCalls(serviceWorker)).map((call) => JSON.parse(call.body).model);
   expect(models).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5"]);
+});
+
+/** 목 API가 받은 요청의 모델 */
+async function requestedModels(serviceWorker: Parameters<typeof apiCalls>[0]): Promise<string[]> {
+  return (await apiCalls(serviceWorker)).map((call) => JSON.parse(call.body).model);
+}
+
+test("팝업: 높은 품질로 번역해 둔 페이지는 낮은 품질로 바꿔 다시 번역해도 새로 요청하지 않는다 (SPEC 13장 \"캐시를 모델끼리 나눠 씀\")", async ({
+  context,
+  page,
+  serviceWorker,
+  extensionId,
+}) => {
+  await mockTranslationApi(serviceWorker);
+  await page.goto(SENTENCES);
+  const popup = await openPopup(context, serviceWorker, extensionId, await tabIdOf(serviceWorker, SENTENCES));
+  await popup.getByLabel("번역 품질").selectOption({ label: SONNET });
+  await popup.getByRole("button", { name: "번역" }).click();
+  await expect(popup.getByRole("status")).toHaveText("번역 완료");
+  expect(await requestedModels(serviceWorker)).toEqual(["claude-sonnet-5-5"]);
+
+  await popup.getByLabel("번역 품질").selectOption({ label: HAIKU });
+  await popup.getByRole("button", { name: "이 품질로 다시 번역" }).click();
+
+  // 다시 번역은 새 턴을 연다. 모든 문장을 Sonnet 번역에서 꺼내 쓴다.
+  await expect.poll(async () => (await readStorage(serviceWorker)).cacheTurn).toBe(2);
+  await expect(popup.getByRole("status")).toHaveText("번역 완료");
+  await expect(page.locator("#start")).toHaveText("GET STARTED");
+  expect(await requestedModels(serviceWorker)).toEqual(["claude-sonnet-5-5"]);
+});
+
+test("직접 입력한 모델: 목록에 있는 모델의 번역을 쓰고, 번역된 페이지에서는 \"이 품질로 다시 번역\"이 늘 보이며 누르면 그 모델로 다시 번역한다 (SPEC 13장)", async ({
+  context,
+  page,
+  serviceWorker,
+  extensionId,
+}) => {
+  await mockTranslationApi(serviceWorker);
+  await page.goto(SENTENCES);
+  const tabId = await tabIdOf(serviceWorker, SENTENCES);
+  const first = await openPopup(context, serviceWorker, extensionId, tabId);
+  await first.getByRole("button", { name: "번역" }).click();
+  await expect(first.getByRole("status")).toHaveText("번역 완료");
+  await first.close();
+
+  // 옵션 페이지의 고급 설정에서 모델을 직접 입력해 저장한 것과 같다.
+  await serviceWorker.evaluate(() =>
+    chrome.storage.local.set({ settings: { apiKeys: { anthropic: "sk-ant-e2e" }, models: { anthropic: "claude-custom-e2e" } } }),
+  );
+  await page.reload();
+  const popup = await openPopup(context, serviceWorker, extensionId, tabId);
+  await popup.getByRole("button", { name: "번역" }).click();
+  await expect(popup.getByRole("status")).toHaveText("번역 완료");
+  await expect(page.locator("#start")).toHaveText("GET STARTED");
+  expect(await requestedModels(serviceWorker)).toEqual(["claude-haiku-5-5"]);
+
+  await expect(popup.getByLabel("번역 품질")).toHaveValue("custom");
+  const retranslate = popup.getByRole("button", { name: "이 품질로 다시 번역" });
+  await expect(retranslate).toBeVisible();
+  await retranslate.click();
+
+  await expect.poll(() => requestedModels(serviceWorker)).toEqual(["claude-haiku-5-5", "claude-custom-e2e"]);
+  await expect(popup.getByRole("status")).toHaveText("번역 완료");
+  await expect(page.locator("#start")).toHaveText("GET STARTED");
+  await expect(retranslate).toBeVisible();
 });

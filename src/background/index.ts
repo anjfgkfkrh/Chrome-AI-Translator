@@ -27,7 +27,7 @@ import {
   takeDenied,
   takePending,
 } from "./auto-translate";
-import { cacheLimits, cacheStats, cleanUpCache, clearCache, currentTurn, startTurn } from "./cache";
+import { cacheLimits, cacheStats, cleanUpCache, clearCache, currentTurn, removeOldCache, startTurn } from "./cache";
 import { errorMessage, isKeyError, NO_API_KEY_MESSAGE } from "./errors";
 import { beginLog, finishLog, logInfoOf, RequestStats, type RequestEnd } from "./log-recorder";
 import { AnthropicProvider } from "./providers/anthropic";
@@ -53,6 +53,10 @@ chrome.runtime.onInstalled.addListener((details) => {
   void syncAutoTranslate();
   // 시나리오 1: 설치하면 옵션 페이지를 연다.
   if (details.reason === "install") void chrome.runtime.openOptionsPage();
+  // 모델끼리 캐시를 나누기 전 형식의 번역문은 새 규칙으로 찾을 수 없으므로 지운다 (SPEC 13장 "캐시: 이전 형식").
+  if (details.reason === "update") {
+    removeOldCache().catch((err: unknown) => console.warn("[AITranslator] 이전 형식의 캐시를 지우지 못했습니다.", err));
+  }
 });
 
 // 사이트별 자동 번역: 저장된 목록과 실제 권한을 맞춰 다시 등록한다 (SPEC 13장).
@@ -268,7 +272,13 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => controller.abort());
   port.onMessage.addListener((message: ContentToBackground) => {
     if (message?.type === "translate" && Array.isArray(message.groups)) {
-      void handleTranslate(port, message.groups, message.newTurn === true, logInfoOf(message.log), controller.signal);
+      void handleTranslate(
+        port,
+        message.groups,
+        { newTurn: message.newTurn === true, retranslate: message.retranslate === true },
+        logInfoOf(message.log),
+        controller.signal,
+      );
     }
   });
 });
@@ -276,7 +286,7 @@ chrome.runtime.onConnect.addListener((port) => {
 async function handleTranslate(
   port: chrome.runtime.Port,
   groups: RequestGroup[],
-  newTurn: boolean,
+  { newTurn, retranslate }: { newTurn: boolean; retranslate: boolean },
   log: LogInfo | undefined,
   signal: AbortSignal,
 ): Promise<void> {
@@ -307,6 +317,7 @@ async function handleTranslate(
       settings,
       groups,
       turn,
+      retranslate,
       signal,
       onResults: (results) => {
         stats.delivered += results.length;

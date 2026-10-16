@@ -1,5 +1,5 @@
 import { sendMessage, type TabAction, type TabState } from "../shared/messages";
-import { QUALITY_TIERS, qualityTierOf, qualityTierText } from "../shared/models";
+import { isListedModel, QUALITY_TIERS, qualityTierOf, qualityTierText } from "../shared/models";
 import { renderShortcut } from "../shared/shortcut";
 import { originPattern, pageOrigin } from "../shared/sites";
 import { activeApiKey, getSettings, setQualityTier, type Settings } from "../shared/storage";
@@ -30,6 +30,11 @@ const MEGABYTE = 1024 * 1024;
 let action: TabAction = "translate";
 /** 이 팝업에서 번역 품질을 바꿨는지. 바꿨으면 번역된 페이지에 "이 품질로 다시 번역"을 보여 준다 (SPEC 13장). */
 let qualityChanged = false;
+/**
+ * 설정이 직접 입력한 모델인지. 그 모델은 목록에 있는 모델의 캐시도 쓰므로, 번역된 페이지에서는 그 모델로만
+ * 다시 번역할 수 있게 "이 품질로 다시 번역"을 늘 보여 준다 (SPEC 13장 "직접 입력한 모델의 다시 번역").
+ */
+let customModel = false;
 let lastState: TabState | undefined;
 for (const tier of QUALITY_TIERS) qualitySelect.add(new Option(qualityTierText(tier), tier.id));
 const tabId = await targetTabId();
@@ -120,6 +125,7 @@ function showDenied(): void {
 
 async function refresh(): Promise<void> {
   const settings = await getSettings();
+  customModel = !isListedModel(settings.model, settings.provider);
   await renderCacheUsage(settings.cacheMaxMB);
   // 고른 제공업체의 키가 있는지로 본다 (SPEC 13장 "OpenRouter 추가").
   const hasKey = activeApiKey(settings) !== undefined;
@@ -149,10 +155,10 @@ function renderQuality(settings: Settings): void {
   if (qualitySelect.value !== value) qualitySelect.value = value;
 }
 
-/** 번역된 페이지(번역 완료·원문 표시 중)에서 품질을 바꿨을 때만 보인다. */
+/** 번역된 페이지(번역 완료·원문 표시 중)에서 품질을 바꿨을 때나, 직접 입력한 모델일 때만 보인다. */
 function renderRetranslate(): void {
   const translated = lastState?.status === "translated" || lastState?.status === "original";
-  retranslateButton.hidden = !(qualityChanged && translated);
+  retranslateButton.hidden = !((qualityChanged || customModel) && translated);
 }
 
 function renderNoKey(): void {

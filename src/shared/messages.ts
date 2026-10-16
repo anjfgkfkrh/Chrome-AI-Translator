@@ -121,7 +121,8 @@ export const TRANSLATE_PORT = "translate";
 export type ContentToBackground =
   // newTurn: 페이지 번역을 시작하는 요청이면 true, 번역 보기 중 화면이 바뀌어 더 번역하는 요청이면 false.
   // 캐시 정리의 턴을 센다 (SPEC 13장 "캐시 정리: 턴"). log: 최근 번역 기록의 한 건 (SPEC 13장 "기록의 한 건")
-  | { type: "translate"; groups: RequestGroup[]; newTurn: boolean; log: LogInfo }
+  // retranslate: "이 품질로 다시 번역"으로 시작한 번역의 요청. 직접 입력한 모델은 그 모델이 번역한 캐시만 쓴다 (SPEC 13장)
+  | { type: "translate"; groups: RequestGroup[]; newTurn: boolean; retranslate: boolean; log: LogInfo }
   // 번역을 기다리는 동안 서비스 워커가 멈추지 않게 보낸다.
   | { type: "ping" };
 

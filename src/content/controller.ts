@@ -78,6 +78,7 @@ export class TranslationController {
 
   /**
    * 기억한 번역문을 버리고 지금 설정(번역 품질)으로 처음부터 다시 번역한다 (SPEC 13장 "이 품질로 다시 번역").
+   * 이 번역의 요청에는 retranslate를 붙인다. 직접 입력한 모델이면 그 모델이 번역한 캐시만 쓴다 (SPEC 13장).
    * 번역 중에는 하지 않는다. 돌려주는 Promise는 원문으로 되돌리고 새 번역을 시작했을 때 풀린다.
    */
   async retranslate(): Promise<void> {
@@ -85,7 +86,9 @@ export class TranslationController {
     this.watcher.stop();
     await this.page.reset();
     this.hasTranslations = false;
-    void this.translate();
+    this.automatic = false;
+    this.watcher.start();
+    void this.run(undefined, true);
   }
 
   /** 원문 보기 (API 호출 없음). 원문 보기 상태에서는 새 텍스트를 번역하지 않는다 (SPEC 4.6). */
@@ -110,8 +113,11 @@ export class TranslationController {
     return this.run(nodes);
   }
 
-  /** 돌려주는 Promise는 번역이 끝날 때 풀린다 (테스트용). */
-  private run(changed?: Node[]): Promise<void> {
+  /**
+   * 돌려주는 Promise는 번역이 끝날 때 풀린다 (테스트용). retranslate는 "이 품질로 다시 번역"으로 시작한 번역이다.
+   * 그 뒤 화면이 바뀌어 더 번역하는 것은 평소대로 요청한다.
+   */
+  private run(changed?: Node[], retranslate = false): Promise<void> {
     this.started = true;
     this.error = undefined;
     if (this.running === 0) {
@@ -128,7 +134,7 @@ export class TranslationController {
       this.logUrl = pageUrl();
     }
     return this.page
-      .translate((groups, deliver) => this.request(groups, deliver, newTurn), changed)
+      .translate((groups, deliver) => this.request(groups, deliver, newTurn, retranslate), changed)
       .catch((err: unknown) => this.fail(err))
       .finally(() => {
         this.running--;
@@ -140,6 +146,7 @@ export class TranslationController {
     groups: RequestGroup[],
     deliver: (results: SegmentGroup[]) => void,
     newTurn: boolean,
+    retranslate: boolean,
   ): Promise<void> {
     this.progress.total += groups.length;
     return new Promise((resolve, reject) => {
@@ -174,7 +181,7 @@ export class TranslationController {
         clearInterval(keepAlive);
         reject(new TranslationError("번역 실패: 백그라운드와 연결이 끊어졌습니다.", false));
       });
-      send({ type: "translate", groups, newTurn, log: this.logInfo() });
+      send({ type: "translate", groups, newTurn, retranslate, log: this.logInfo() });
     });
   }
 

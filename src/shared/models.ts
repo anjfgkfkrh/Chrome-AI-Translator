@@ -19,26 +19,48 @@ export const PROVIDERS: readonly ProviderInfo[] = [
 
 export const DEFAULT_PROVIDER: ProviderId = "anthropic";
 
+/**
+ * 번역문 캐시를 함께 쓰는 모델과 등급. 제공업체가 달라도 같은 모델이면 같은 이름이고,
+ * 등급이 같거나 높은 모델이 번역해 둔 것은 그대로 쓴다 (SPEC 13장 "캐시를 모델끼리 나눠 씀"·"캐시: 품질 비교").
+ */
+export const CACHE_MODEL_RANKS = { "haiku-5.5": 1, "sonnet-5.5": 2, "opus-5.5": 3 } as const;
+
+export type CacheModelName = keyof typeof CACHE_MODEL_RANKS;
+
 export interface ModelInfo {
   id: string;
   name: string;
   /** 비용 우선 / 균형 / 품질 우선 */
   description: string;
+  /** 캐시에 적는 이름 */
+  cacheName: CacheModelName;
   /** Anthropic 직접 연결의 "빠르게"에서 사고를 끄는 값. 없으면 끌 수 없는 모델이다 (SPEC 13장 "번역 방식"). */
   thinkingOff?: { type: "disabled" | "between_tools" };
 }
 
 export const MODELS: Readonly<Record<ProviderId, readonly ModelInfo[]>> = {
   anthropic: [
-    { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", description: "비용 우선", thinkingOff: { type: "disabled" } },
-    { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", description: "균형", thinkingOff: { type: "between_tools" } },
-    { id: "claude-opus-5-5", name: "Claude Opus 5.5", description: "품질 우선" },
+    {
+      id: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      description: "비용 우선",
+      cacheName: "haiku-5.5",
+      thinkingOff: { type: "disabled" },
+    },
+    {
+      id: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      description: "균형",
+      cacheName: "sonnet-5.5",
+      thinkingOff: { type: "between_tools" },
+    },
+    { id: "claude-opus-5-5", name: "Claude Opus 5.5", description: "품질 우선", cacheName: "opus-5.5" },
   ],
   // 사고를 끌 수 있는지는 OpenRouter 모델 정보로 판단한다 (SPEC 13장 "OpenRouter 번역 방식").
   openrouter: [
-    { id: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5", description: "비용 우선" },
-    { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", description: "균형" },
-    { id: "anthropic/claude-opus-5.5", name: "Claude Opus 5.5", description: "품질 우선" },
+    { id: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5", description: "비용 우선", cacheName: "haiku-5.5" },
+    { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", description: "균형", cacheName: "sonnet-5.5" },
+    { id: "anthropic/claude-opus-5.5", name: "Claude Opus 5.5", description: "품질 우선", cacheName: "opus-5.5" },
   ],
 };
 

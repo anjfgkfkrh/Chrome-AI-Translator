@@ -54,6 +54,7 @@ function run(
     settings?: Partial<Settings>;
     signal?: AbortSignal;
     turn?: number;
+    retranslate?: boolean;
     onUsage?: (usage: TokenUsage) => void;
   } = {},
 ) {
@@ -64,6 +65,7 @@ function run(
     settings: { ...defaultSettings(), ...options.settings },
     groups,
     turn: options.turn ?? 1,
+    retranslate: options.retranslate,
     signal: options.signal ?? new AbortController().signal,
     onResults: (results) => delivered.push(...results),
     onUsage: options.onUsage,
@@ -451,11 +453,11 @@ describe("캐시 (SPEC 4.7, 13장)", () => {
     stubFetch(echoUppercase);
 
     await run([group("g1", "Docs")], { turn: 3 }).promise;
-    const key = Object.keys(chromeMock.storage).find((name) => name.startsWith("t:"))!;
-    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 3 });
+    const key = Object.keys(chromeMock.storage).find((name) => name.startsWith("c:"))!;
+    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 3, m: "haiku-5.5" });
 
     await run([group("g1", "Docs")], { turn: 7 }).promise;
-    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 7 });
+    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 7, m: "haiku-5.5" });
   });
 
   it("번역하지 못해 원문으로 둔 그룹은 캐시하지 않는다", async () => {
@@ -510,7 +512,7 @@ describe("번역 방식과 캐시 (SPEC 13장)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requestBody(fetchMock.mock.calls[1]![1])).not.toHaveProperty("thinking");
     expect(accurate.delivered).toEqual([{ id: "g1", segments: ["DOCS"] }]);
-    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))![1];
+    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("c:"))![1];
     expect(entry).not.toHaveProperty("f");
   });
 
@@ -528,8 +530,99 @@ describe("번역 방식과 캐시 (SPEC 13장)", () => {
 
     await run([group("g1", "Docs")], { settings: { ...fast, model: "claude-opus-5-5" } }).promise;
 
-    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))![1];
+    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("c:"))![1];
     expect(entry).not.toHaveProperty("f");
+  });
+});
+
+describe("캐시를 모델끼리 나눠 씀 (SPEC 13장)", () => {
+  const sonnet = { model: "claude-sonnet-5-5" };
+  const opus = { model: "claude-opus-5-5" };
+  /** 직접 입력한 모델 */
+  const custom = { model: "claude-custom-1" };
+
+  function requestedModels(fetchMock: ReturnType<typeof stubFetch>): string[] {
+    return fetchMock.mock.calls.map(([, init]) => requestBody(init).model as string);
+  }
+
+  function cacheEntries(): unknown[] {
+    return Object.entries(chromeMock.storage)
+      .filter(([key]) => key.startsWith("c:"))
+      .map(([, entry]) => entry);
+  }
+
+  it("높은 품질로 번역해 둔 것은 낮은 품질에서 그대로 쓴다 (Opus → Sonnet → Haiku 기본 → Haiku 빠르게)", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")], { settings: opus }).promise;
+    for (const settings of [sonnet, {}, { translationMode: "fast" } as const]) {
+      const lower = run([group("g1", "Docs")], { settings });
+      await lower.promise;
+      expect(lower.delivered).toEqual([{ id: "g1", segments: ["DOCS"] }]);
+    }
+
+    expect(requestedModels(fetchMock)).toEqual(["claude-opus-5-5"]);
+  });
+
+  it("낮은 품질로 번역해 둔 것은 높은 품질에서 다시 번역해 바꿔 넣고, 그 뒤로는 낮은 품질도 그것을 쓴다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")]).promise;
+    await run([group("g1", "Docs")], { settings: sonnet }).promise;
+    await run([group("g1", "Docs")]).promise;
+    await run([group("g1", "Docs")], { settings: sonnet }).promise;
+
+    expect(requestedModels(fetchMock)).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5"]);
+    expect(cacheEntries()).toEqual([{ s: ["DOCS"], u: 1, m: "sonnet-5.5" }]);
+  });
+
+  it("Anthropic과 OpenRouter의 같은 모델은 캐시를 함께 쓴다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+    await run([group("g1", "Docs")]).promise;
+
+    const viaOpenRouter = run([group("g1", "Docs")], {
+      settings: { provider: "openrouter", model: "anthropic/claude-haiku-5.5" },
+    });
+    await viaOpenRouter.promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(viaOpenRouter.delivered).toEqual([{ id: "g1", segments: ["DOCS"] }]);
+  });
+
+  it("직접 입력한 모델은 목록에 있는 모델의 번역을 쓰고, 그 모델이 번역한 것은 그 모델만 쓴다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+    await run([group("g1", "Docs")]).promise;
+
+    await run([group("g1", "Docs"), group("g2", "Guide")], { settings: custom }).promise;
+    await run([group("g2", "Guide")], { settings: custom }).promise;
+    await run([group("g2", "Guide")]).promise;
+
+    // g1은 Haiku 번역을 쓰고 g2만 직접 입력한 모델로 번역한다. 그 번역은 그 모델이 다시 쓰고, Haiku는 쓰지 않는다.
+    expect(requestedIds(fetchMock)).toEqual([["g1"], ["g2"], ["g2"]]);
+    expect(requestedModels(fetchMock)).toEqual(["claude-haiku-5-5", "claude-custom-1", "claude-haiku-5-5"]);
+  });
+
+  it("직접 입력한 모델로 \"이 품질로 다시 번역\"하면 그 모델이 번역한 캐시만 쓰고, 목록에 있는 모델의 번역은 그대로 둔다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+    await run([group("g1", "Docs")]).promise;
+    await run([group("g2", "Guide")], { settings: custom }).promise;
+
+    const again = run([group("g1", "Docs"), group("g2", "Guide")], { settings: custom, retranslate: true });
+    await again.promise;
+    await run([group("g1", "Docs")]).promise;
+
+    expect(requestedIds(fetchMock)).toEqual([["g1"], ["g2"], ["g1"]]);
+    expect(requestedModels(fetchMock)).toEqual(["claude-haiku-5-5", "claude-custom-1", "claude-custom-1"]);
+    expect(again.delivered.map((g) => g.id).sort()).toEqual(["g1", "g2"]);
+  });
+
+  it("목록에 있는 모델은 \"이 품질로 다시 번역\"이어도 같거나 높은 품질의 캐시를 쓴다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+    await run([group("g1", "Docs")], { settings: opus }).promise;
+
+    await run([group("g1", "Docs")], { retranslate: true }).promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -553,7 +646,7 @@ describe("빠르게의 형식 오류 재요청 (SPEC 13장)", () => {
     expect(requestBody(fetchMock.mock.calls[0]![1]).thinking).toEqual({ type: "disabled" });
     expect(requestBody(fetchMock.mock.calls[1]![1])).not.toHaveProperty("thinking");
     expect(delivered.map((g) => g.id).sort()).toEqual(["g1", "g2"]);
-    const entries = Object.entries(chromeMock.storage).filter(([key]) => key.startsWith("t:"));
+    const entries = Object.entries(chromeMock.storage).filter(([key]) => key.startsWith("c:"));
     const bySegments = Object.fromEntries(entries.map(([, entry]) => [(entry as { s: string[] }).s[0], entry]));
     expect(bySegments.HELLO).not.toHaveProperty("f");
     expect(bySegments.WORLD).toMatchObject({ f: 1 });

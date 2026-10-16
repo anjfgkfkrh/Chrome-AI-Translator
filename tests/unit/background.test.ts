@@ -69,6 +69,16 @@ describe("설치", () => {
     await vi.waitFor(() => expect(chromeMock.createMenu).toHaveBeenCalledOnce());
     expect(chromeMock.openOptionsPage).not.toHaveBeenCalled();
   });
+
+  it("업데이트하면 모델끼리 캐시를 나누기 전 형식의 번역문을 지운다 (SPEC 13장 \"캐시: 이전 형식\")", async () => {
+    chromeMock.storage["t:old"] = { s: ["옛 번역"], u: 1 };
+    chromeMock.storage["c:new"] = { s: ["새 번역"], u: 1, m: "haiku-5.5" };
+
+    chromeMock.onInstalled[0]!({ reason: "update", previousVersion: "0.0.1" });
+
+    await vi.waitFor(() => expect(chromeMock.storage).not.toHaveProperty("t:old"));
+    expect(chromeMock.storage).toHaveProperty("c:new");
+  });
 });
 
 describe("우클릭 메뉴 (SPEC 4.8, 13장)", () => {
@@ -331,7 +341,7 @@ describe("팝업 메시지", () => {
   });
 
   it("캐시 통계와 비우기 (옵션 페이지)", async () => {
-    chromeMock.storage["t:abc"] = { s: ["가"], t: 1 };
+    chromeMock.storage["c:abc"] = { s: ["가"], u: 1, m: "haiku-5.5" };
 
     expect(await ask({ type: "get-cache-stats" })).toEqual({ count: 1, bytes: expect.any(Number) });
     await ask({ type: "clear-cache" });
@@ -520,7 +530,7 @@ describe("캐시 정리의 턴과 사용량 (SPEC 13장)", () => {
   }
 
   function cacheEntry() {
-    return Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))?.[1];
+    return Object.entries(chromeMock.storage).find(([key]) => key.startsWith("c:"))?.[1];
   }
 
   it("페이지 번역을 시작하는 요청이면 새 턴을 열고, 화면 변화로 더 번역하는 요청이면 지금 턴을 쓴다", async () => {
@@ -529,14 +539,14 @@ describe("캐시 정리의 턴과 사용량 (SPEC 13장)", () => {
 
     await translateOnce(true);
     expect(chromeMock.storage.cacheTurn).toBe(1);
-    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 1 });
+    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 1, m: "haiku-5.5" });
 
     await translateOnce(false);
     expect(chromeMock.storage.cacheTurn).toBe(1);
 
     await translateOnce(true);
     expect(chromeMock.storage.cacheTurn).toBe(2);
-    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 2 });
+    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 2, m: "haiku-5.5" });
   });
 
   it("번역 응답과 연결 테스트의 사용량을 이번 달 사용량에 더한다", async () => {
@@ -591,19 +601,44 @@ describe("권한 창 뒤처리 (SPEC 13장 \"권한 거부 안내\"·\"남긴 �
   });
 });
 
+describe("캐시를 모델끼리 나눠 씀 (SPEC 13장)", () => {
+  async function translateOnce(retranslate: boolean) {
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+    receive({ type: "translate", groups: [{ id: "g1", segments: ["Docs"] }], newTurn: true, retranslate });
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: "done" }));
+    return posted;
+  }
+
+  it("\"이 품질로 다시 번역\" 표시를 번역에 넘긴다: 직접 입력한 모델이면 그때만 목록에 있는 모델의 캐시를 쓰지 않는다", async () => {
+    saveKey();
+    const fetchMock = vi.fn<typeof fetch>(echoUppercase);
+    vi.stubGlobal("fetch", fetchMock);
+    await translateOnce(false);
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, models: { anthropic: "claude-custom-1" } };
+
+    expect(await translateOnce(false)).toContainEqual({ type: "results", groups: [{ id: "g1", segments: ["DOCS"] }] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await translateOnce(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body)).model).toBe("claude-custom-1");
+  });
+});
+
 describe("캐시 바로 정리 (SPEC 13장 \"상한을 지금 사용량보다 낮추면\")", () => {
   it("옵션 페이지가 상한을 낮추면 지금 설정으로 바로 정리한다", async () => {
     chromeMock.storage.cacheTurn = 20;
-    chromeMock.storage["t:old"] = { s: ["번역문"], u: 1 };
-    chromeMock.storage["t:new"] = { s: ["번역문"], u: 20 };
+    chromeMock.storage["c:old"] = { s: ["번역문"], u: 1 };
+    chromeMock.storage["c:new"] = { s: ["번역문"], u: 20 };
     // 상한 1MB의 10%(약 105KB)를 넘겨 두면 정리가 시작된다: 19턴 동안 쓰이지 않은 항목은 지운다.
     chromeMock.storage.settings = { cacheMaxMB: 1, cacheCleanupPercent: 10 };
     chromeMock.storage.filler = "x".repeat(110_000);
 
     await ask({ type: "clean-cache" }, optionsPage);
 
-    expect(chromeMock.storage).not.toHaveProperty("t:old");
-    expect(chromeMock.storage).toHaveProperty("t:new");
+    expect(chromeMock.storage).not.toHaveProperty("c:old");
+    expect(chromeMock.storage).toHaveProperty("c:new");
   });
 });
 

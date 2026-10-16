@@ -1,7 +1,7 @@
 import type { RequestGroup, SegmentGroup } from "../shared/messages";
 import type { Settings } from "../shared/storage";
 import type { TokenUsage } from "../shared/usage";
-import { cacheKey, cacheLimits, lookupCache, storeCache } from "./cache";
+import { cacheLimits, cacheQuality, cacheSlot, lookupCache, storeCache, type CacheQuality } from "./cache";
 import { validateGroups } from "./prompt";
 import { ProviderError, type TranslationProvider } from "./providers/types";
 
@@ -25,6 +25,8 @@ export interface TranslationJob {
   groups: RequestGroup[];
   /** 캐시 정리의 턴. 이 번역에서 쓰거나 넣은 번역문은 이 턴에 쓴 것으로 적는다 (SPEC 13장). */
   turn: number;
+  /** "이 품질로 다시 번역"으로 시작한 요청. 직접 입력한 모델이면 그 모델이 번역한 캐시만 쓴다 (SPEC 13장). */
+  retranslate?: boolean;
   /** 탭이 닫히거나 페이지를 옮기면 취소된다 (SPEC 5.4). */
   signal: AbortSignal;
   /** 배치가 끝날 때마다 검증을 통과한 그룹을 넘긴다. */
@@ -52,7 +54,8 @@ export interface TranslationSummary {
 export async function translateGroups(job: TranslationJob): Promise<TranslationSummary> {
   // 빠르게여도 사고를 끌 수 없는 모델이면 정확하게로 번역하고 저장한다 (SPEC 13장 "번역 방식과 캐시").
   const fast = job.settings.translationMode === "fast" && (await job.provider.canDisableThinking(job.settings.model));
-  const { misses, keyById } = await useCache(job, fast);
+  const quality = cacheQuality(job.settings, fast);
+  const { misses, keyById } = await useCache(job, quality);
   const stopAll = new AbortController();
   const signal = AbortSignal.any([job.signal, stopAll.signal]);
   limiter.max = job.settings.maxConcurrentRequests;
@@ -72,7 +75,7 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
         if (done.length > 0) {
           // 조각 하나라도 빠르게로 번역했으면 빠르게로 저장한다.
           const isFast = (id: string) => assembler.piecesOf(id).some((piece) => fastIds.has(piece));
-          saving.push(saveToCache(job, done, keyById, isFast));
+          saving.push(saveToCache(job, done, keyById, quality, isFast));
           job.onResults(done);
         }
         if (outcome.error !== undefined) lastError = outcome.error;
@@ -89,26 +92,29 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
   return { failed: assembler.failedCount, lastError };
 }
 
-/** 캐시에 있는 그룹은 바로 넘기고, 없는 그룹과 그 캐시 키를 돌려준다. 저장소를 못 읽으면 캐시 없이 진행한다. */
+/**
+ * 캐시에 같거나 높은 품질의 번역문이 있는 그룹은 바로 넘기고, 없는 그룹과 새 번역을 넣을 캐시 키를 돌려준다.
+ * 저장소를 못 읽으면 캐시 없이 진행한다.
+ */
 async function useCache(
   job: TranslationJob,
-  fast: boolean,
+  quality: CacheQuality,
 ): Promise<{ misses: RequestGroup[]; keyById: Map<string, string> }> {
-  const keys = await Promise.all(job.groups.map((group) => cacheKey(job.settings, group)));
-  const cached = await lookupCache(keys, job.turn, { accurate: !fast }).catch((err: unknown) => {
+  const slots = await Promise.all(job.groups.map((group) => cacheSlot(job.settings, group, job.retranslate === true)));
+  const cached = await lookupCache(slots, job.turn, quality).catch((err: unknown) => {
     console.warn("[AITranslator] 캐시를 읽지 못했습니다.", err);
-    return new Map<string, string[]>();
+    return [];
   });
   const hits: SegmentGroup[] = [];
   const misses: RequestGroup[] = [];
   const keyById = new Map<string, string>();
   job.groups.forEach((group, i) => {
-    const segments = cached.get(keys[i]!);
+    const segments = cached[i];
     if (segments?.length === group.segments.length) {
       hits.push({ id: group.id, segments });
     } else {
       misses.push(group);
-      keyById.set(group.id, keys[i]!);
+      keyById.set(group.id, slots[i]!.write);
     }
   });
   job.onCacheHits?.(hits.length);
@@ -120,6 +126,7 @@ async function saveToCache(
   job: TranslationJob,
   groups: readonly SegmentGroup[],
   keyById: ReadonlyMap<string, string>,
+  quality: CacheQuality,
   isFast: (id: string) => boolean,
 ): Promise<void> {
   const accurate = new Map<string, string[]>();
@@ -130,8 +137,8 @@ async function saveToCache(
   }
   const limits = cacheLimits(job.settings);
   try {
-    await storeCache(accurate, job.turn, limits);
-    await storeCache(fast, job.turn, limits, { fast: true });
+    await storeCache(accurate, job.turn, limits, { model: quality.model, fast: false });
+    await storeCache(fast, job.turn, limits, { model: quality.model, fast: true });
   } catch (err) {
     console.warn("[AITranslator] 번역을 캐시에 저장하지 못했습니다.", err);
   }

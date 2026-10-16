@@ -116,7 +116,7 @@ test("옵션 페이지: 저장된 번역 수와 크기를 보여 주고, 캐시�
   await page.goto(`${FIXTURE_ORIGIN}/sentences.html`);
   await injectContentScript(serviceWorker, `${FIXTURE_ORIGIN}/sentences.html`);
   await expect(page.locator("#start")).toHaveText("GET STARTED");
-  await expect.poll(async () => Object.keys(await readStorage(serviceWorker)).filter((key) => key.startsWith("t:")).length).toBe(5);
+  await expect.poll(async () => Object.keys(await readStorage(serviceWorker)).filter((key) => key.startsWith("c:")).length).toBe(5);
 
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options/options.html`);
@@ -126,5 +126,5 @@ test("옵션 페이지: 저장된 번역 수와 크기를 보여 주고, 캐시�
 
   await expect(options.getByText("캐시를 비웠습니다.")).toBeVisible();
   await expect(options.getByText("저장된 번역이 없습니다.")).toBeVisible();
-  expect(Object.keys(await readStorage(serviceWorker)).some((key) => key.startsWith("t:"))).toBe(false);
+  expect(Object.keys(await readStorage(serviceWorker)).some((key) => key.startsWith("c:"))).toBe(false);
 });
