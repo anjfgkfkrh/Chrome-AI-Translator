@@ -239,14 +239,16 @@ test("사용량: 번역하면 열어 둔 옵션 페이지의 이번 달 사용�
 });
 
 test.describe("캐시 정리 (SPEC 13장)", () => {
-  test("정리 기준: 바꾸면 바로 저장하고, 범위를 벗어나면 가까운 값으로 맞춘다", async ({
+  test("상한과 정리 기준: 바꾸면 바로 저장하고, 범위를 벗어나면 가까운 값으로 맞춘다", async ({
     context,
     serviceWorker,
     extensionId,
   }) => {
     const options = await openOptions(context, extensionId);
+    const max = options.getByLabel("캐시 상한");
     const percent = options.locator("#cleanup-percent");
     const turns = options.locator("#idle-turns");
+    await expect(max).toHaveValue("8");
     await expect(options.getByText("캐시가")).toContainText("% 이상 차면");
     await expect(percent).toHaveValue("80");
     await expect(turns).toHaveValue("10");
@@ -259,11 +261,15 @@ test.describe("캐시 정리 (SPEC 13장)", () => {
     await turns.fill("0");
     await turns.press("Tab");
     await expect(turns).toHaveValue("1");
+    await max.fill("20");
+    await max.press("Tab");
+    await expect(max).toHaveValue("9");
     await expect
       .poll(async () => (await readStorage(serviceWorker)).settings)
-      .toMatchObject({ cacheCleanupPercent: 100, cacheIdleTurns: 1 });
+      .toMatchObject({ cacheMaxMB: 9, cacheCleanupPercent: 100, cacheIdleTurns: 1 });
 
     await options.reload();
+    await expect(max).toHaveValue("9");
     await expect(percent).toHaveValue("100");
     await expect(turns).toHaveValue("1");
   });
@@ -299,4 +305,48 @@ test.describe("캐시 정리 (SPEC 13장)", () => {
       })
       .toEqual({ turn: 1, stale: 0, fresh: 5 });
   });
+});
+
+test("팝업: 캐시 사용량을 \"캐시 사용량 / 상한 (%)\"로 보여 준다 (SPEC 13장)", async ({
+  context,
+  page,
+  serviceWorker,
+  extensionId,
+}) => {
+  await mockTranslationApi(serviceWorker);
+  const popup = await translateFromPopup(context, page, serviceWorker, extensionId);
+  await expect(popup.getByRole("status")).toHaveText("번역 완료");
+
+  await expect(popup.locator("#cache-usage")).toHaveText("캐시 0.1 MB / 8 MB (0%)");
+});
+
+test("번역 방식·최대 출력 토큰: \"저장\"으로 함께 저장하고, 다음 번역 요청에 쓴다 (SPEC 13장)", async ({
+  context,
+  page,
+  serviceWorker,
+  extensionId,
+}) => {
+  await mockTranslationApi(serviceWorker);
+  const options = await openOptions(context, extensionId);
+  const mode = options.getByLabel("번역 방식");
+  const maxTokens = options.getByLabel("최대 출력 토큰");
+  await expect(mode).toHaveValue("accurate");
+  await expect(maxTokens).toHaveValue("32000");
+
+  await mode.selectOption({ label: "빠르게 (사고 끔)" });
+  await maxTokens.fill("200000");
+  await options.getByRole("button", { name: "저장", exact: true }).click();
+
+  await expect(options.getByRole("status")).toHaveText("저장했습니다.");
+  await expect(maxTokens).toHaveValue("128000");
+  expect((await readStorage(serviceWorker)).settings).toMatchObject({
+    translationMode: "fast",
+    maxOutputTokens: 128_000,
+  });
+
+  await page.goto(SENTENCES);
+  await injectContentScript(serviceWorker, SENTENCES);
+  await expect(page.locator("#start")).toHaveText("GET STARTED");
+  const body = JSON.parse((await apiCalls(serviceWorker))[0]!.body);
+  expect(body).toMatchObject({ max_tokens: 128_000, thinking: { type: "disabled" } });
 });

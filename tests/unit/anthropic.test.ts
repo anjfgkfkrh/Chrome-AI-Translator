@@ -113,6 +113,8 @@ describe("AnthropicProvider.testConnection", () => {
 });
 
 describe("AnthropicProvider.translate", () => {
+  /** 기본 설정: 정확하게, 최대 출력 토큰 32,000 */
+  const options = { maxTokens: 32_000, fast: false };
   const request: TranslateRequest = {
     targetLanguage: "ko",
     glossary: { keep: ["LangChain"], map: { agent: "에이전트" } },
@@ -122,24 +124,53 @@ describe("AnthropicProvider.translate", () => {
   it("목록의 모델: 시스템 프롬프트 캐시, effort medium, 구조화된 출력으로 보낸다 (SPEC 13장)", async () => {
     const fetchMock = stubFetch(async () => messageResponse('{"groups":[{"id":"g1","segments":["시작하기"]}]}'));
 
-    await provider.translate(request, { apiKey, model });
+    await provider.translate(request, { ...options, apiKey, model });
 
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("https://api.anthropic.com/v1/messages");
     expect(init?.headers).toMatchObject({ "x-api-key": apiKey, "anthropic-dangerous-direct-browser-access": "true" });
     expect(requestBody(init)).toEqual({
       model,
-      max_tokens: 16_000,
+      max_tokens: 32_000,
       system: [{ type: "text", text: systemPrompt(request.glossary), cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: JSON.stringify({ target_language: "ko", groups: request.groups }) }],
       output_config: { effort: "medium", format: { type: "json_schema", schema: RESPONSE_SCHEMA } },
     });
   });
 
+  it("최대 출력 토큰은 설정을 따른다", async () => {
+    const fetchMock = stubFetch(async () => messageResponse('{"groups":[]}'));
+
+    await provider.translate(request, { ...options, apiKey, model, maxTokens: 64_000 });
+
+    expect(requestBody(fetchMock.mock.calls[0]![1]).max_tokens).toBe(64_000);
+  });
+
+  it.each([
+    ["claude-haiku-5-5", { type: "disabled" }],
+    ["claude-sonnet-5-5", { type: "between_tools" }],
+    ["claude-opus-5-5", undefined],
+    ["claude-custom-model", undefined],
+  ])("빠르게: %s는 사고를 %o로 끈다 (끌 수 없거나 직접 입력한 모델은 보내지 않음, SPEC 13장)", async (id, thinking) => {
+    const fetchMock = stubFetch(async () => messageResponse('{"groups":[]}'));
+
+    await provider.translate(request, { ...options, apiKey, model: id, fast: true });
+
+    expect(requestBody(fetchMock.mock.calls[0]![1]).thinking).toEqual(thinking);
+  });
+
+  it("정확하게: 사고 설정을 보내지 않는다 (모델 기본값 = 켬)", async () => {
+    const fetchMock = stubFetch(async () => messageResponse('{"groups":[]}'));
+
+    await provider.translate(request, { ...options, apiKey, model });
+
+    expect(requestBody(fetchMock.mock.calls[0]![1])).not.toHaveProperty("thinking");
+  });
+
   it("직접 입력한 모델에는 effort와 구조화된 출력을 보내지 않는다", async () => {
     const fetchMock = stubFetch(async () => messageResponse('{"groups":[]}'));
 
-    await provider.translate(request, { apiKey, model: "claude-custom-model" });
+    await provider.translate(request, { ...options, apiKey, model: "claude-custom-model" });
 
     expect(requestBody(fetchMock.mock.calls[0]![1])).not.toHaveProperty("output_config");
   });
@@ -156,7 +187,7 @@ describe("AnthropicProvider.translate", () => {
       }),
     );
 
-    expect(await provider.translate(request, { apiKey, model })).toEqual({
+    expect(await provider.translate(request, { ...options, apiKey, model })).toEqual({
       groups: [{ id: "g1", segments: ["시작하기"] }],
       usage: { inputTokens: 20, cacheWriteTokens: 600, cacheReadTokens: 0, outputTokens: 15 },
     });
@@ -170,7 +201,7 @@ describe("AnthropicProvider.translate", () => {
     stubFetch(async () => messageResponse(text, extra));
     const onUsage = vi.fn();
 
-    await expect(provider.translate(request, { apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
+    await expect(provider.translate(request, { ...options, apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
 
     expect(onUsage).toHaveBeenCalledExactlyOnceWith({
       inputTokens: 100,
@@ -184,24 +215,24 @@ describe("AnthropicProvider.translate", () => {
     stubFetch(async () => apiError(429, "rate_limit_error", "slow down"));
     const onUsage = vi.fn();
 
-    await expect(provider.translate(request, { apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
+    await expect(provider.translate(request, { ...options, apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
 
     expect(onUsage).not.toHaveBeenCalled();
   });
 
   it.each([
     ["refusal", "refusal"],
-    ["max_tokens", "format"],
+    ["max_tokens", "truncated"],
   ])("stop_reason %s → %s 오류", async (stopReason, kind) => {
     stubFetch(async () => messageResponse('{"groups":[', { stop_reason: stopReason }));
 
-    await expect(provider.translate(request, { apiKey, model })).rejects.toMatchObject({ kind });
+    await expect(provider.translate(request, { ...options, apiKey, model })).rejects.toMatchObject({ kind });
   });
 
   it("429의 retry-after(초)를 밀리초로 넘긴다", async () => {
     stubFetch(async () => new Response("{}", { status: 429, headers: { "retry-after": "2" } }));
 
-    const error = await provider.translate(request, { apiKey, model }).catch((err: unknown) => err);
+    const error = await provider.translate(request, { ...options, apiKey, model }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(ProviderError);
     expect(error).toMatchObject({ kind: "rate_limit", status: 429, retryAfterMs: 2_000 });

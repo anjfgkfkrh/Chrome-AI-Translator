@@ -4,6 +4,7 @@ import {
   cacheKey,
   cacheLimits,
   cacheStats,
+  cleanUpCache,
   clearCache,
   currentTurn,
   lookupCache,
@@ -98,6 +99,20 @@ describe("lookupCache / storeCache", () => {
     expect(chromeMock.storage["t:a"]).toEqual({ s: ["시작하기"], u: 5 });
   });
 
+  it("빠르게(사고 끔) 번역은 표시해 넣고, 정확하게 찾을 때는 없는 것으로 본다 (SPEC 13장 \"번역 방식과 캐시\")", async () => {
+    await storeCache(new Map([["t:fast", ["빠른 번역"]]]), 1, roomy, { fast: true });
+    expect(chromeMock.storage["t:fast"]).toEqual({ s: ["빠른 번역"], u: 1, f: 1 });
+
+    expect(await lookupCache(["t:fast"], 2, { accurate: true })).toEqual(new Map());
+    expect(chromeMock.storage["t:fast"]).toEqual({ s: ["빠른 번역"], u: 1, f: 1 });
+
+    expect(await lookupCache(["t:fast"], 3)).toEqual(new Map([["t:fast", ["빠른 번역"]]]));
+    expect(chromeMock.storage["t:fast"]).toEqual({ s: ["빠른 번역"], u: 3, f: 1 });
+
+    await storeCache(new Map([["t:fast", ["정확한 번역"]]]), 4, roomy);
+    expect(chromeMock.storage["t:fast"]).toEqual({ s: ["정확한 번역"], u: 4 });
+  });
+
   it("시각으로 기록된 이전 항목(M5 형식)도 찾는다", async () => {
     chromeMock.storage["t:old"] = { s: ["옛 번역"], t: 1_700_000_000_000 };
 
@@ -180,6 +195,22 @@ describe("캐시 정리 (SPEC 13장 \"캐시 정리\")", () => {
     await storeCache(new Map([["t:10", ["번역문입니다"]]]), 10, limits);
 
     expect(cacheEntries()).toEqual(["t:10", "t:9"]);
+  });
+
+  it("상한은 설정을 따르고, 넘으면 상한의 7/8까지 줄인다", () => {
+    expect(cacheLimits({ ...settings, cacheMaxMB: 4 })).toMatchObject({
+      maxBytes: 4 * 1024 * 1024,
+      targetBytes: 3.5 * 1024 * 1024,
+    });
+  });
+
+  it("새 번역을 넣지 않아도 바로 정리할 수 있다 (상한을 낮췄을 때)", async () => {
+    await fillCache();
+    const limits = limitsAtEightyPercent(await usedBytes());
+
+    await cleanUpCache(12, limits);
+
+    expect(cacheEntries()).toEqual(["t:11", "t:12"]);
   });
 
   it("기본 정리 기준은 상한 8MB의 80%, 최근 10턴", () => {

@@ -18,6 +18,10 @@ let chromeMock: ReturnType<typeof installChromeMock>;
 let autoTranslate: boolean;
 /** 백그라운드가 돌려주는 탭 상태 */
 let tabState: unknown;
+/** 팝업이 닫힌 사이 권한을 거부했는지 */
+let denied: boolean;
+/** 캐시 크기 (바이트) */
+let cacheBytes: number;
 
 beforeEach(() => {
   // 팝업은 500ms마다 상태를 다시 읽는다. 가짜 타이머로 두어 테스트가 끝나면 그 반복도 멈추게 한다.
@@ -26,6 +30,8 @@ beforeEach(() => {
   chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" } };
   autoTranslate = false;
   tabState = { status: "idle", progress: { done: 0, total: 0 }, partial: false };
+  denied = false;
+  cacheBytes = 0;
   chromeMock.runtimeSendMessage.mockImplementation(async (message) => {
     switch (message.type) {
       case "get-auto-translate":
@@ -36,6 +42,10 @@ beforeEach(() => {
         return tabState;
       case "get-shortcut":
         return "⌥T";
+      case "take-auto-translate-denied":
+        return denied;
+      case "get-cache-stats":
+        return { count: cacheBytes > 0 ? 1 : 0, bytes: cacheBytes };
     }
     return undefined;
   });
@@ -161,5 +171,56 @@ describe("팝업: 실패 원인 (SPEC 13장 \"실패 원인 표시\")", () => {
     await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("요청 한도를 초과했습니다. 잠시 후 다시 시도하세요."));
     expect(document.querySelector<HTMLButtonElement>("#action")?.textContent).toBe("번역");
     expect(document.querySelector<HTMLParagraphElement>("#detail")?.hidden).toBe(true);
+  });
+});
+
+describe("팝업: 권한 창 때문에 팝업이 닫힌 뒤 (SPEC 13장 \"권한 거부 안내\")", () => {
+  it("다시 열었을 때 거부했던 것이면 안내 문구를 보여 준다", async () => {
+    denied = true;
+
+    await openPopup();
+
+    expect(autoMessage().hidden).toBe(false);
+    expect(autoMessage().textContent).toBe("권한을 허용해야 이 사이트를 자동으로 번역할 수 있습니다.");
+    expect(checkbox().checked).toBe(false);
+    expect(sent("take-auto-translate-denied")).toEqual([{ type: "take-auto-translate-denied", origin: ORIGIN }]);
+  });
+
+  it("거부한 적이 없으면 안내하지 않는다", async () => {
+    await openPopup();
+
+    expect(autoMessage().hidden).toBe(true);
+  });
+});
+
+describe("팝업: 캐시 사용량 (SPEC 13장 \"팝업의 캐시 사용량\")", () => {
+  const usage = () => document.querySelector("#cache-usage")?.textContent;
+
+  it("\"캐시 사용량 MB / 상한 MB (%)\"로 보여 준다. 상한은 설정을 따른다", async () => {
+    cacheBytes = 1.25 * 1024 * 1024;
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, cacheMaxMB: 5 };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(usage()).toBe("캐시 1.3 MB / 5 MB (25%)"));
+  });
+
+  it("비었으면 0, 아주 작으면 0.1 MB로 보여 준다", async () => {
+    await openPopup();
+    await vi.waitFor(() => expect(usage()).toBe("캐시 0 MB / 8 MB (0%)"));
+
+    cacheBytes = 2_000;
+    await vi.advanceTimersByTimeAsync(500);
+
+    await vi.waitFor(() => expect(usage()).toBe("캐시 0.1 MB / 8 MB (0%)"));
+  });
+
+  it("키가 없거나 번역할 수 없는 페이지에서도 보여 준다", async () => {
+    chromeMock.storage.settings = {};
+    chromeMock.getTab.mockResolvedValue({ id: 7, url: "chrome://extensions/" } as chrome.tabs.Tab);
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(usage()).toBe("캐시 0 MB / 8 MB (0%)"));
   });
 });

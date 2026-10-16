@@ -1,4 +1,4 @@
-import { isListedModel } from "../../shared/models";
+import { isListedModel, listedModel } from "../../shared/models";
 import type { TokenUsage } from "../../shared/usage";
 import { errorMessage } from "../errors";
 import { parseResponse, RESPONSE_SCHEMA, systemPrompt, userMessage } from "../prompt";
@@ -6,6 +6,7 @@ import {
   ProviderError,
   type ProviderErrorKind,
   type RequestOptions,
+  type TranslateOptions,
   type TranslateRequest,
   type TranslateResponse,
   type TranslationProvider,
@@ -15,7 +16,6 @@ import {
 const API_URL = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
 const TEST_TIMEOUT_MS = 30_000;
-const TRANSLATE_MAX_TOKENS = 16_000;
 
 interface MessageResponse {
   content?: { type: string; text?: string }[];
@@ -33,11 +33,11 @@ export class AnthropicProvider implements TranslationProvider {
 
   async translate(
     req: TranslateRequest,
-    { apiKey, model, signal, onUsage }: RequestOptions & { signal?: AbortSignal },
+    { apiKey, model, signal, onUsage, maxTokens, fast }: TranslateOptions,
   ): Promise<TranslateResponse> {
     const body: Record<string, unknown> = {
       model,
-      max_tokens: TRANSLATE_MAX_TOKENS,
+      max_tokens: maxTokens,
       // 시스템 프롬프트와 용어집은 요청마다 같으므로 캐시한다 (SPEC 13장).
       system: [{ type: "text", text: systemPrompt(req.glossary), cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userMessage(req) }],
@@ -46,12 +46,15 @@ export class AnthropicProvider implements TranslationProvider {
     if (isListedModel(model)) {
       body.output_config = { effort: "medium", format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
     }
+    // 빠르게: 사고를 끈다. Opus처럼 끌 수 없는 모델과 직접 입력한 모델은 그대로 둔다 (SPEC 13장 "번역 방식").
+    const thinkingOff = listedModel(model)?.thinkingOff;
+    if (fast && thinkingOff) body.thinking = thinkingOff;
 
     const res = (await postMessages(apiKey, body, signal)) as MessageResponse;
     const usage = toUsage(res.usage);
     if (usage) onUsage?.(usage);
     if (res.stop_reason === "refusal") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
-    if (res.stop_reason === "max_tokens") throw new ProviderError("format", "응답이 max_tokens에서 잘렸습니다.");
+    if (res.stop_reason === "max_tokens") throw new ProviderError("truncated", "응답이 max_tokens에서 잘렸습니다.");
     const text = (res.content ?? [])
       .filter((block) => block.type === "text")
       .map((block) => block.text ?? "")

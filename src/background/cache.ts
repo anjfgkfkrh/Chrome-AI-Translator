@@ -9,15 +9,17 @@ import type { Settings } from "../shared/storage";
 const KEY_PREFIX = "t:";
 /** 지금까지 연 턴 수 */
 const TURN_KEY = "cacheTurn";
-/** 캐시 상한. 정리한 뒤에도 넘으면 오래 쓰지 않은 것부터 TARGET_BYTES가 될 때까지 지운다. */
-const MAX_BYTES = 8 * 1024 * 1024;
-const TARGET_BYTES = 7 * 1024 * 1024;
+const MEGABYTE = 1024 * 1024;
+/** 정리한 뒤에도 상한을 넘으면 상한의 이 비율이 될 때까지 지운다 (8MB → 7MB, SPEC 13장). */
+const TARGET_RATIO = 7 / 8;
 
-/** 저장 형식. 항목이 많으므로 이름을 짧게 쓴다: s = 번역된 세그먼트, u = 마지막으로 쓴 턴 */
+/** 저장 형식. 항목이 많으므로 이름을 짧게 쓴다: s = 번역된 세그먼트, u = 마지막으로 쓴 턴, f = 빠르게(사고 끔) 번역 */
 interface Entry {
   s: string[];
   /** M5 형식(t = 시각)으로 저장된 항목에는 없다. 턴 0으로 본다 (SPEC 13장). */
   u?: number;
+  /** 사고를 끄고 번역했으면 1 (SPEC 13장 "번역 방식과 캐시") */
+  f?: 1;
 }
 
 export interface CacheLimits {
@@ -30,9 +32,10 @@ export interface CacheLimits {
 }
 
 export function cacheLimits(settings: Settings): CacheLimits {
+  const maxBytes = settings.cacheMaxMB * MEGABYTE;
   return {
-    maxBytes: MAX_BYTES,
-    targetBytes: TARGET_BYTES,
+    maxBytes,
+    targetBytes: Math.floor(maxBytes * TARGET_RATIO),
     cleanupPercent: settings.cacheCleanupPercent,
     idleTurns: settings.cacheIdleTurns,
   };
@@ -72,31 +75,44 @@ export async function currentTurn(): Promise<number> {
   return typeof turn === "number" ? turn : 0;
 }
 
-/** 캐시에서 찾는다. 찾은 번역문은 이번 턴에 쓴 것으로 적는다. */
-export async function lookupCache(keys: readonly string[], turn: number): Promise<Map<string, string[]>> {
+/**
+ * 캐시에서 찾는다. 찾은 번역문은 이번 턴에 쓴 것으로 적는다.
+ * accurate면 빠르게(사고 끔) 번역한 것은 없는 것으로 본다. 다시 번역해 바꿔 넣게 된다 (SPEC 13장 "번역 방식과 캐시").
+ */
+export async function lookupCache(
+  keys: readonly string[],
+  turn: number,
+  options: { accurate: boolean } = { accurate: false },
+): Promise<Map<string, string[]>> {
   const found = new Map<string, string[]>();
   if (keys.length === 0) return found;
   const items = await chrome.storage.local.get<Record<string, unknown>>([...keys]);
   const touched: Record<string, Entry> = {};
   for (const [key, entry] of Object.entries(items)) {
-    if (!isEntry(entry)) continue;
+    if (!isEntry(entry) || (options.accurate && entry.f === 1)) continue;
     found.set(key, entry.s);
-    touched[key] = { s: entry.s, u: turn };
+    touched[key] = entry.f === 1 ? { s: entry.s, u: turn, f: 1 } : { s: entry.s, u: turn };
   }
   if (found.size > 0) await chrome.storage.local.set(touched);
   return found;
 }
 
-/** 번역 결과를 이번 턴에 쓴 것으로 넣고, 저장소가 정리를 시작할 만큼 찼으면 정리한다. */
+/** 번역 결과를 이번 턴에 쓴 것으로 넣고, 저장소가 정리를 시작할 만큼 찼으면 정리한다. fast면 빠르게로 표시한다. */
 export async function storeCache(
   translations: ReadonlyMap<string, string[]>,
   turn: number,
   limits: CacheLimits,
+  options: { fast: boolean } = { fast: false },
 ): Promise<void> {
   if (translations.size === 0) return;
-  const entries = [...translations].map(([key, s]) => [key, { s, u: turn } satisfies Entry]);
+  const entries = [...translations].map(([key, s]) => [key, (options.fast ? { s, u: turn, f: 1 } : { s, u: turn }) satisfies Entry]);
   await chrome.storage.local.set(Object.fromEntries(entries));
-  await cleaning(() => cleanUp(turn, limits));
+  await cleanUpCache(turn, limits);
+}
+
+/** 저장소가 정리를 시작할 만큼 찼으면 정리한다. 정리는 하나씩 한다. */
+export function cleanUpCache(turn: number, limits: CacheLimits): Promise<void> {
+  return cleaning(() => cleanUp(turn, limits));
 }
 
 export async function cacheStats(): Promise<{ count: number; bytes: number }> {
@@ -156,6 +172,7 @@ function isEntry(value: unknown): value is Entry {
   return (
     Array.isArray(entry?.s) &&
     entry.s.every((segment) => typeof segment === "string") &&
-    (entry.u === undefined || typeof entry.u === "number")
+    (entry.u === undefined || typeof entry.u === "number") &&
+    (entry.f === undefined || entry.f === 1)
   );
 }

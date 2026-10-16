@@ -6,6 +6,7 @@ import {
   setAutoTranslateOrigins,
   setCacheCleanup,
   setGlossary,
+  setTranslationOptions,
 } from "../../src/shared/storage";
 import { installChromeMock } from "./chrome-mock";
 
@@ -28,6 +29,9 @@ describe("설정 저장소", () => {
       },
       autoTranslateOrigins: [],
       model: "claude-haiku-5-5",
+      translationMode: "accurate",
+      maxOutputTokens: 32_000,
+      cacheMaxMB: 8,
       cacheCleanupPercent: 80,
       cacheIdleTurns: 10,
       maxConcurrentRequests: 3,
@@ -55,12 +59,20 @@ describe("설정 저장소", () => {
     expect((await getSettings()).glossary.keep).not.toContain("Changed");
   });
 
-  it("캐시 정리 기준을 저장하고, 기본값(80%, 10턴)이면 저장값을 지운다", async () => {
-    await setCacheCleanup(60, 25);
-    expect(chromeMock.storage).toEqual({ settings: { cacheCleanupPercent: 60, cacheIdleTurns: 25 } });
+  it("번역 방식과 최대 출력 토큰을 저장하고, 기본값(정확하게, 32,000)이면 저장값을 지운다", async () => {
+    await setTranslationOptions({ translationMode: "fast", maxOutputTokens: 64_000 });
+    expect(chromeMock.storage).toEqual({ settings: { translationMode: "fast", maxOutputTokens: 64_000 } });
 
-    await setCacheCleanup(80, 10);
+    await setTranslationOptions({ translationMode: "accurate", maxOutputTokens: 32_000 });
     expect(chromeMock.storage).toEqual({ settings: {} });
+  });
+
+  it("캐시 상한과 정리 기준을 저장하고, 기본값(8MB, 80%, 10턴)인 항목은 저장값을 지운다", async () => {
+    await setCacheCleanup({ cacheMaxMB: 4, cacheCleanupPercent: 60, cacheIdleTurns: 25 });
+    expect(chromeMock.storage).toEqual({ settings: { cacheMaxMB: 4, cacheCleanupPercent: 60, cacheIdleTurns: 25 } });
+
+    await setCacheCleanup({ cacheMaxMB: 8, cacheCleanupPercent: 60, cacheIdleTurns: 10 });
+    expect(chromeMock.storage).toEqual({ settings: { cacheCleanupPercent: 60 } });
   });
 
   it("자동 번역 사이트 목록을 저장하고, 비우면 저장값을 지운다", async () => {

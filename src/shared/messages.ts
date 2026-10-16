@@ -48,9 +48,13 @@ export type Message =
   | { type: "get-shortcut" }
   | { type: "get-cache-stats" }
   | { type: "clear-cache" }
+  // 캐시 상한·정리 기준을 바꾼 뒤 바로 정리한다
+  | { type: "clean-cache" }
   // 사이트별 자동 번역 (SPEC 4.8): 팝업의 체크박스, 옵션 페이지의 삭제
   | { type: "get-auto-translate"; origin: string }
   | { type: "auto-translate-pending"; origin: string; tabId: number }
+  // 팝업이 닫힌 사이 권한을 거부했는지 (팝업을 열 때 한 번 묻는다)
+  | { type: "take-auto-translate-denied"; origin: string }
   | { type: "set-auto-translate"; origin: string; enabled: boolean; tabId?: number }
   // 콘텐츠 스크립트의 알림에서 "설정 열기"를 눌렀을 때 (콘텐츠 스크립트는 옵션 페이지를 직접 열 수 없다)
   | { type: "open-options" };
@@ -68,9 +72,12 @@ interface Responses {
   "get-shortcut": string;
   "get-cache-stats": { count: number; bytes: number };
   "clear-cache": void;
+  "clean-cache": void;
   /** 목록에 있고 권한도 있으면 true */
   "get-auto-translate": boolean;
   "auto-translate-pending": void;
+  /** 거부했으면 true (한 번만) */
+  "take-auto-translate-denied": boolean;
   /** 바뀐 뒤의 상태. 켜려 했지만 권한이 없으면 false */
   "set-auto-translate": boolean;
   "open-options": void;

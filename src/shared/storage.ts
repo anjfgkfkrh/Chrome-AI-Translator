@@ -10,6 +10,12 @@ export interface Settings {
   glossary: { keep: string[]; map: Record<string, string>; version: number };
   autoTranslateOrigins: string[]; // 예: ["https://docs.langchain.com"]
   model: string;
+  /** 정확하게(사고 켬) / 빠르게(사고 끔) (SPEC 13장 "번역 방식") */
+  translationMode: "accurate" | "fast";
+  /** 번역 요청의 max_tokens (사고 포함) (SPEC 13장 "최대 출력 토큰") */
+  maxOutputTokens: number;
+  /** 캐시 상한 (MB) (SPEC 13장 "캐시 상한 설정") */
+  cacheMaxMB: number;
   /** 캐시 상한의 몇 %부터 정리할지 (SPEC 13장 "캐시 정리") */
   cacheCleanupPercent: number;
   /** 최근 몇 턴(번역 횟수) 동안 쓰이지 않은 번역문을 지울지 */
@@ -19,6 +25,8 @@ export interface Settings {
 }
 
 /** 옵션 페이지에서 고를 수 있는 캐시 정리 기준의 범위 (SPEC 13장). 벗어나면 가까운 값으로 맞춘다. */
+export const MAX_OUTPUT_TOKENS_RANGE = { min: 1_000, max: 128_000 } as const;
+export const CACHE_MAX_MB_RANGE = { min: 1, max: 9 } as const;
 export const CACHE_CLEANUP_PERCENT_RANGE = { min: 10, max: 100 } as const;
 export const CACHE_IDLE_TURNS_RANGE = { min: 1, max: 1000 } as const;
 
@@ -34,6 +42,9 @@ export function defaultSettings(): Settings {
     },
     autoTranslateOrigins: [],
     model: DEFAULT_MODEL_ID,
+    translationMode: "accurate",
+    maxOutputTokens: 32_000,
+    cacheMaxMB: 8,
     cacheCleanupPercent: 80,
     cacheIdleTurns: 10,
     maxConcurrentRequests: 3,
@@ -102,14 +113,29 @@ export async function setGlossary(terms: GlossaryTerms): Promise<void> {
   await writeStored(stored);
 }
 
-/** 캐시 정리 기준을 저장한다. 기본값이면 저장값을 지운다. */
-export async function setCacheCleanup(percent: number, idleTurns: number): Promise<void> {
+type TranslationOptions = Pick<Settings, "translationMode" | "maxOutputTokens">;
+
+/** 번역 방식과 최대 출력 토큰을 저장한다. 기본값인 항목은 저장값을 지운다. */
+export async function setTranslationOptions(values: TranslationOptions): Promise<void> {
   const defaults = defaultSettings();
   const stored = await readStored();
-  if (percent === defaults.cacheCleanupPercent) delete stored.cacheCleanupPercent;
-  else stored.cacheCleanupPercent = percent;
-  if (idleTurns === defaults.cacheIdleTurns) delete stored.cacheIdleTurns;
-  else stored.cacheIdleTurns = idleTurns;
+  if (values.translationMode === defaults.translationMode) delete stored.translationMode;
+  else stored.translationMode = values.translationMode;
+  if (values.maxOutputTokens === defaults.maxOutputTokens) delete stored.maxOutputTokens;
+  else stored.maxOutputTokens = values.maxOutputTokens;
+  await writeStored(stored);
+}
+
+type CacheSettings = Pick<Settings, "cacheMaxMB" | "cacheCleanupPercent" | "cacheIdleTurns">;
+
+/** 캐시 상한과 정리 기준을 저장한다. 기본값인 항목은 저장값을 지운다. */
+export async function setCacheCleanup(values: CacheSettings): Promise<void> {
+  const defaults = defaultSettings();
+  const stored = await readStored();
+  for (const key of ["cacheMaxMB", "cacheCleanupPercent", "cacheIdleTurns"] as const) {
+    if (values[key] === defaults[key]) delete stored[key];
+    else stored[key] = values[key];
+  }
   await writeStored(stored);
 }
 

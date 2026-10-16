@@ -19,9 +19,10 @@ import {
   isAutoTranslated,
   rememberPending,
   syncAutoTranslate,
+  takeDenied,
   takePending,
 } from "./auto-translate";
-import { cacheStats, clearCache, currentTurn, startTurn } from "./cache";
+import { cacheLimits, cacheStats, cleanUpCache, clearCache, currentTurn, startTurn } from "./cache";
 import { errorMessage, isKeyError, NO_API_KEY_MESSAGE } from "./errors";
 import { AnthropicProvider } from "./providers/anthropic";
 import { translateGroups } from "./translator";
@@ -117,10 +118,14 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
       return respond(cacheStats());
     case "clear-cache":
       return respond(clearCache());
+    case "clean-cache":
+      return respond(cleanCacheNow());
     case "get-auto-translate":
       return respond(isAutoTranslated(message.origin));
     case "auto-translate-pending":
       return respond(rememberPending(message.origin, message.tabId));
+    case "take-auto-translate-denied":
+      return respond(takeDenied(message.origin));
     case "set-auto-translate":
       return respond(setAutoTranslate(message.origin, message.enabled, message.tabId));
   }
@@ -203,6 +208,11 @@ async function shortcut(): Promise<string> {
 
 async function testConnection(apiKey: string, model: string): Promise<TestConnectionResult> {
   return provider.testConnection({ apiKey, model: model || (await getSettings()).model, onUsage: saveUsage });
+}
+
+/** 캐시 상한·정리 기준을 바꾼 뒤 지금 설정으로 바로 정리한다 (SPEC 13장 "상한을 지금 사용량보다 낮추면"). */
+async function cleanCacheNow(): Promise<void> {
+  await cleanUpCache(await currentTurn(), cacheLimits(await getSettings()));
 }
 
 /** 사용량을 더한다 (SPEC 4.10). 저장하지 못해도 번역은 계속한다. */

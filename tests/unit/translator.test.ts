@@ -6,6 +6,7 @@ import type { TokenUsage } from "../../src/shared/usage";
 import {
   echoUppercase,
   errorResponse,
+  requestBody,
   messageResponse,
   requestedGroups,
   translationResponse,
@@ -337,17 +338,44 @@ describe("응답 검증과 재요청 (SPEC 4.3, 13장)", () => {
     expect(summary.failed).toBe(1);
   });
 
-  it("max_tokens에서 잘린 응답은 파싱 실패처럼 한 번 더 보낸다", async () => {
-    const fetchMock = stubFetchSequence(
-      () => messageResponse('{"groups":[{"id":"g1","segm', { stop_reason: "max_tokens" }),
-      () => translationResponse([{ id: "g1", segments: ["안녕"] }]),
+  it("max_tokens에서 잘리면 같은 배치를 다시 보내지 않고 반으로 나눠 보낸다 (SPEC 13장 \"잘린 응답\")", async () => {
+    let call = 0;
+    const fetchMock = stubFetch(async (input, init) =>
+      call++ === 0 ? messageResponse('{"groups":[', { stop_reason: "max_tokens" }) : echoUppercase(input, init),
+    );
+    const groups = [group("g1", "One two"), group("g2", "Three"), group("g3", "Four five"), group("g4", "Six")];
+
+    const { delivered, promise } = run(groups);
+    const summary = await promise;
+
+    expect(requestedIds(fetchMock)).toEqual([["g1", "g2", "g3", "g4"], ["g1", "g2"], ["g3", "g4"]]);
+    expect(delivered.map((result) => result.id)).toEqual(["g1", "g2", "g3", "g4"]);
+    expect(summary.failed).toBe(0);
+  });
+
+  it("나눈 반도 잘리면 더 나누고, 그룹 하나만 남았는데도 잘리면 그 그룹만 원문으로 둔다", async () => {
+    const fetchMock = stubFetch(async (input, init) =>
+      requestedGroups(init).some((g) => g.id === "g1")
+        ? messageResponse('{"groups":[', { stop_reason: "max_tokens" })
+        : echoUppercase(input, init),
     );
 
-    const { delivered, promise } = run([group("g1", "Hello")]);
-    await promise;
+    const { delivered, promise } = run([group("g1", "Long"), group("g2", "Short"), group("g3", "Also short")]);
+    const summary = await promise;
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(delivered).toEqual([{ id: "g1", segments: ["안녕"] }]);
+    // 글자 수로 반을 나눈다: [g1 g2 | g3] → [g1 | g2] → g1 하나도 잘려 원문으로 둔다.
+    expect(requestedIds(fetchMock)).toEqual([["g1", "g2", "g3"], ["g1", "g2"], ["g1"], ["g2"], ["g3"]]);
+    expect(delivered.map((result) => result.id)).toEqual(["g2", "g3"]);
+    expect(summary).toMatchObject({ failed: 1 });
+    expect(String(summary.lastError)).toContain("max_tokens");
+  });
+
+  it("최대 출력 토큰과 번역 방식은 설정을 따른다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+
+    await run([group("g1", "Hello")], { settings: { maxOutputTokens: 8_000, translationMode: "fast" } }).promise;
+
+    expect(requestBody(fetchMock.mock.calls[0]![1])).toMatchObject({ max_tokens: 8_000, thinking: { type: "disabled" } });
   });
 
   it("refusal은 다시 보내지 않고 원문으로 둔다", async () => {
@@ -464,5 +492,43 @@ describe("사용량 (SPEC 4.10, 13장)", () => {
       { inputTokens: 10, cacheWriteTokens: 5, cacheReadTokens: 0, outputTokens: 3 },
       { inputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 50 },
     ]);
+  });
+});
+
+describe("번역 방식과 캐시 (SPEC 13장)", () => {
+  const fast = { translationMode: "fast" } as const;
+
+  it("정확하게 번역할 때 캐시에 있는 것이 빠르게 번역한 것이면 다시 번역해 바꿔 넣는다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")], { settings: fast }).promise;
+    const accurate = run([group("g1", "Docs")]);
+    await accurate.promise;
+    await run([group("g1", "Docs")]).promise;
+
+    // 빠르게 1번, 정확하게 1번 요청하고, 그다음 정확하게는 바꿔 넣은 캐시를 쓴다.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(fetchMock.mock.calls[1]![1])).not.toHaveProperty("thinking");
+    expect(accurate.delivered).toEqual([{ id: "g1", segments: ["DOCS"] }]);
+    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))![1];
+    expect(entry).not.toHaveProperty("f");
+  });
+
+  it("빠르게 번역할 때는 정확하게 번역한 캐시도 그대로 쓴다", async () => {
+    const fetchMock = stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")]).promise;
+    await run([group("g1", "Docs")], { settings: fast }).promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("사고를 끌 수 없는 모델(Opus)은 빠르게여도 정확하게 번역한 것으로 저장한다", async () => {
+    stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")], { settings: { ...fast, model: "claude-opus-5-5" } }).promise;
+
+    const entry = Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))![1];
+    expect(entry).not.toHaveProperty("f");
   });
 });

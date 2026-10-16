@@ -16,12 +16,19 @@ const settingsLink = element<HTMLAnchorElement>("#settings-link");
 const autoRow = element<HTMLLabelElement>("#auto-row");
 const autoCheckbox = element<HTMLInputElement>("#auto");
 const autoMessage = element<HTMLParagraphElement>("#auto-message");
+const cacheUsage = element<HTMLParagraphElement>("#cache-usage");
+const DENIED_MESSAGE = "권한을 허용해야 이 사이트를 자동으로 번역할 수 있습니다.";
+const MEGABYTE = 1024 * 1024;
 
 let action: TabAction = "translate";
 const tabId = await targetTabId();
 /** 대상 탭의 출처. http·https 페이지가 아니면 자동 번역 체크박스를 보여 주지 않는다 (SPEC 13장). */
 const origin = tabId === undefined ? undefined : pageOrigin((await chrome.tabs.get(tabId).catch(() => undefined))?.url);
-if (origin !== undefined) autoCheckbox.checked = await sendMessage({ type: "get-auto-translate", origin });
+if (origin !== undefined) {
+  autoCheckbox.checked = await sendMessage({ type: "get-auto-translate", origin });
+  // 권한 창이 뜨면 팝업이 닫혀 거부 문구를 보여 줄 수 없었다. 다시 열 때 한 번 보여 준다 (SPEC 13장 "권한 거부 안내").
+  if (await sendMessage({ type: "take-auto-translate-denied", origin })) showDenied();
+}
 
 settingsLink.addEventListener("click", (event) => {
   event.preventDefault();
@@ -55,8 +62,7 @@ autoCheckbox.addEventListener("change", () => {
       return;
     }
     autoCheckbox.checked = false;
-    autoMessage.textContent = "권한을 허용해야 이 사이트를 자동으로 번역할 수 있습니다.";
-    autoMessage.hidden = false;
+    showDenied();
     void sendMessage({ type: "set-auto-translate", origin, enabled: false });
   });
 });
@@ -79,12 +85,27 @@ async function poll(): Promise<void> {
   }
 }
 
+function showDenied(): void {
+  autoMessage.textContent = DENIED_MESSAGE;
+  autoMessage.hidden = false;
+}
+
 async function refresh(): Promise<void> {
-  const { apiKeys } = await getSettings();
+  const { apiKeys, cacheMaxMB } = await getSettings();
+  await renderCacheUsage(cacheMaxMB);
   autoRow.hidden = !apiKeys.anthropic || origin === undefined;
   if (!apiKeys.anthropic) return renderNoKey();
   if (tabId === undefined) return render({ status: "unsupported" });
   render(await sendMessage({ type: "get-tab-state", tabId }));
+}
+
+/** 캐시 사용량: "캐시 1.2 MB / 8 MB (15%)" (SPEC 13장 "팝업의 캐시 사용량") */
+async function renderCacheUsage(maxMB: number): Promise<void> {
+  const { bytes } = await sendMessage({ type: "get-cache-stats" });
+  // 옵션 페이지처럼 아주 작아도 0.0이 아니라 0.1로 보여 준다.
+  const used = bytes === 0 ? "0" : Math.max(0.1, bytes / MEGABYTE).toFixed(1);
+  const percent = Math.round((bytes / (maxMB * MEGABYTE)) * 100);
+  cacheUsage.textContent = `캐시 ${used} MB / ${maxMB} MB (${percent}%)`;
 }
 
 function renderNoKey(): void {

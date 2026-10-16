@@ -7,10 +7,14 @@ import { getSettings, setAutoTranslateOrigins } from "../shared/storage";
 
 const SCRIPT_PREFIX = "auto:";
 const PENDING_KEY = "pendingAutoTranslate";
+/** 이보다 오래된 표시는 무시한다. 나중에 다른 경로로 권한이 추가될 때 우연히 켜지지 않도록 (SPEC 13장). */
+const PENDING_TTL_MS = 5 * 60 * 1000;
 
 interface Pending {
   origin: string;
   tabId: number;
+  /** 남긴 시각 (ms) */
+  at: number;
 }
 
 /**
@@ -66,17 +70,42 @@ export function syncAutoTranslate(): Promise<void> {
 
 /** 권한 창이 뜨면 팝업이 닫힐 수 있다. 팝업이 요청 직전에 남긴 표시로 백그라운드가 이어서 켠다 (SPEC 13장). */
 export async function rememberPending(origin: string, tabId: number): Promise<void> {
-  await chrome.storage.session.set({ [PENDING_KEY]: { origin, tabId } satisfies Pending });
+  await chrome.storage.session.set({ [PENDING_KEY]: { origin, tabId, at: Date.now() } satisfies Pending });
+}
+
+/**
+ * 권한 창이 뜨면 팝업이 닫혀 거부 문구를 그릴 수 없다. 다음에 팝업을 열 때, 이 출처에 남긴 표시가 있는데
+ * 권한이 없으면 거부한 것으로 보고 true를 돌려준 뒤 표시를 지운다 (SPEC 13장 "권한 거부 안내").
+ */
+export async function takeDenied(origin: string): Promise<boolean> {
+  const pending = await readPending();
+  if (pending?.origin !== origin || (await hasPermission(origin))) return false;
+  await chrome.storage.session.remove(PENDING_KEY);
+  return true;
 }
 
 /** 남긴 표시를 꺼내고 지운다. */
 export async function takePending(): Promise<Pending | undefined> {
-  const { [PENDING_KEY]: pending } = await chrome.storage.session.get<Record<string, unknown>>(PENDING_KEY);
+  const pending = await readPending();
   await chrome.storage.session.remove(PENDING_KEY);
-  const value = pending as Partial<Pending> | undefined;
-  return typeof value?.origin === "string" && typeof value.tabId === "number"
-    ? { origin: value.origin, tabId: value.tabId }
-    : undefined;
+  return pending;
+}
+
+/** 남긴 표시. 형식이 틀리거나 오래됐으면 지우고 undefined */
+async function readPending(): Promise<Pending | undefined> {
+  const { [PENDING_KEY]: stored } = await chrome.storage.session.get<Record<string, unknown>>(PENDING_KEY);
+  if (stored === undefined) return undefined;
+  const value = stored as Partial<Pending>;
+  const valid =
+    typeof value.origin === "string" &&
+    typeof value.tabId === "number" &&
+    typeof value.at === "number" &&
+    Date.now() - value.at <= PENDING_TTL_MS;
+  if (!valid) {
+    await chrome.storage.session.remove(PENDING_KEY);
+    return undefined;
+  }
+  return { origin: value.origin!, tabId: value.tabId!, at: value.at! };
 }
 
 async function removeSite(origin: string): Promise<void> {

@@ -557,3 +557,51 @@ describe("캐시 정리의 턴과 사용량 (SPEC 13장)", () => {
     );
   });
 });
+
+describe("권한 창 뒤처리 (SPEC 13장 \"권한 거부 안내\"·\"남긴 표시 만료\")", () => {
+  const origin = "https://docs.example.com";
+
+  it("팝업이 닫힌 사이 거부했으면, 다시 열 때 한 번만 거부로 알려 주고 표시를 지운다", async () => {
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+    chromeMock.containsPermissions.mockResolvedValue(false);
+
+    expect(await ask({ type: "take-auto-translate-denied", origin: "https://other.example.com" })).toBe(false);
+    expect(await ask({ type: "take-auto-translate-denied", origin })).toBe(true);
+    expect(chromeMock.session).toEqual({});
+    expect(await ask({ type: "take-auto-translate-denied", origin })).toBe(false);
+  });
+
+  it("권한이 있으면(허용한 경우) 거부로 보지 않는다", async () => {
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+
+    expect(await ask({ type: "take-auto-translate-denied", origin })).toBe(false);
+  });
+
+  it("5분이 지난 표시는 무시하고 지운다", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+    vi.spyOn(Date, "now").mockReturnValue(now + 5 * 60 * 1000 + 1);
+
+    chromeMock.onPermissionsAdded[0]!({ origins: [`${origin}/*`] });
+
+    await vi.waitFor(() => expect(chromeMock.session).toEqual({}));
+    expect(chromeMock.registered).toEqual([]);
+  });
+});
+
+describe("캐시 바로 정리 (SPEC 13장 \"상한을 지금 사용량보다 낮추면\")", () => {
+  it("옵션 페이지가 상한을 낮추면 지금 설정으로 바로 정리한다", async () => {
+    chromeMock.storage.cacheTurn = 20;
+    chromeMock.storage["t:old"] = { s: ["번역문"], u: 1 };
+    chromeMock.storage["t:new"] = { s: ["번역문"], u: 20 };
+    // 상한 1MB의 10%(약 105KB)를 넘겨 두면 정리가 시작된다: 19턴 동안 쓰이지 않은 항목은 지운다.
+    chromeMock.storage.settings = { cacheMaxMB: 1, cacheCleanupPercent: 10 };
+    chromeMock.storage.filler = "x".repeat(110_000);
+
+    await ask({ type: "clean-cache" }, optionsPage);
+
+    expect(chromeMock.storage).not.toHaveProperty("t:old");
+    expect(chromeMock.storage).toHaveProperty("t:new");
+  });
+});

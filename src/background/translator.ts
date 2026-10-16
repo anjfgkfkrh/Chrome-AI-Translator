@@ -1,4 +1,5 @@
 import type { RequestGroup, SegmentGroup } from "../shared/messages";
+import { thinkingDisabled } from "../shared/models";
 import type { Settings } from "../shared/storage";
 import type { TokenUsage } from "../shared/usage";
 import { cacheKey, cacheLimits, lookupCache, storeCache } from "./cache";
@@ -82,7 +83,8 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
 /** 캐시에 있는 그룹은 바로 넘기고, 없는 그룹과 그 캐시 키를 돌려준다. 저장소를 못 읽으면 캐시 없이 진행한다. */
 async function useCache(job: TranslationJob): Promise<{ misses: RequestGroup[]; keyById: Map<string, string> }> {
   const keys = await Promise.all(job.groups.map((group) => cacheKey(job.settings, group)));
-  const cached = await lookupCache(keys, job.turn).catch((err: unknown) => {
+  const accurate = !thinkingDisabled(job.settings);
+  const cached = await lookupCache(keys, job.turn, { accurate }).catch((err: unknown) => {
     console.warn("[AITranslator] 캐시를 읽지 못했습니다.", err);
     return new Map<string, string[]>();
   });
@@ -112,7 +114,8 @@ async function saveToCache(
     const key = keyById.get(group.id);
     if (key) translations.set(key, group.segments);
   }
-  await storeCache(translations, job.turn, cacheLimits(job.settings)).catch((err: unknown) => {
+  const fast = thinkingDisabled(job.settings);
+  await storeCache(translations, job.turn, cacheLimits(job.settings), { fast }).catch((err: unknown) => {
     console.warn("[AITranslator] 번역을 캐시에 저장하지 못했습니다.", err);
   });
 }
@@ -123,7 +126,10 @@ interface BatchOutcome {
   error?: unknown;
 }
 
-/** 배치 하나: 형식 오류(파싱 실패, ID 누락, 개수 불일치, 빈 세그먼트)는 해당 그룹만 1회 재요청한다 (SPEC 4.3, 13장). */
+/**
+ * 배치 하나: 형식 오류(파싱 실패, ID 누락, 개수 불일치, 빈 세그먼트)는 해당 그룹만 1회 재요청한다 (SPEC 4.3, 13장).
+ * max_tokens에서 잘리면 같은 배치를 다시 보내지 않고 반으로 나눠 차례로 보낸다. 그룹 하나만 남았는데도 잘리면 원문으로 둔다.
+ */
 async function translateBatch(job: TranslationJob, groups: RequestGroup[], signal: AbortSignal): Promise<BatchOutcome> {
   const valid: SegmentGroup[] = [];
   let pending = groups;
@@ -138,7 +144,14 @@ async function translateBatch(job: TranslationJob, groups: RequestGroup[], signa
     } catch (err) {
       if (signal.aborted || !(err instanceof ProviderError) || isFatal(err)) throw err;
       error = err;
-      // 파싱 실패·잘린 응답만 배치를 다시 보낸다. 재시도까지 실패한 오류와 refusal은 원문으로 둔다.
+      if (err.kind === "truncated" && pending.length > 1) {
+        // 동시 요청 자리 하나 안에서 차례로 보낸다 (SPEC 13장 "잘린 응답").
+        const [first, second] = halves(pending);
+        const a = await translateBatch(job, first, signal);
+        const b = await translateBatch(job, second, signal);
+        return { valid: [...valid, ...a.valid, ...b.valid], failed: [...a.failed, ...b.failed], error: b.error ?? a.error };
+      }
+      // 파싱 실패만 배치를 다시 보낸다. 재시도까지 실패한 오류, 그룹 하나도 잘린 응답, refusal은 원문으로 둔다.
       if (err.kind !== "format") break;
     }
   }
@@ -159,7 +172,14 @@ async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], sig
     try {
       return await job.provider.translate(
         { targetLanguage: "ko", glossary: job.settings.glossary, groups },
-        { apiKey: job.apiKey, model: job.settings.model, signal, onUsage: job.onUsage },
+        {
+          apiKey: job.apiKey,
+          model: job.settings.model,
+          signal,
+          onUsage: job.onUsage,
+          maxTokens: job.settings.maxOutputTokens,
+          fast: job.settings.translationMode === "fast",
+        },
       );
     } catch (err) {
       if (!(err instanceof ProviderError) || signal.aborted) throw err;
@@ -217,6 +237,16 @@ function sizeOf(group: RequestGroup): Size {
 
 function fits(size: Size, maxNodes: number): boolean {
   return size.nodes <= maxNodes && size.chars <= BATCH_MAX_CHARS;
+}
+
+/** 글자 수가 반쯤 되는 곳에서 둘로 나눈다. 둘 다 그룹이 하나 이상이다. */
+function halves(groups: readonly RequestGroup[]): [RequestGroup[], RequestGroup[]] {
+  const half = groups.reduce((sum, group) => sum + sizeOf(group).chars, 0) / 2;
+  let at = 0;
+  let chars = 0;
+  while (at < groups.length - 1 && chars + sizeOf(groups[at]!).chars <= half) chars += sizeOf(groups[at++]!).chars;
+  at = Math.max(1, at);
+  return [groups.slice(0, at), groups.slice(at)];
 }
 
 /** 그룹을 쪼개지 않고 배치에 담는다. 한도에 닿으면 새 배치를 연다. */

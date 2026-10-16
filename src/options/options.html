@@ -29,6 +29,20 @@
             hidden
           />
         </div>
+        <label for="mode">번역 방식</label>
+        <div class="row">
+          <select id="mode">
+            <option value="accurate">정확하게 (사고 켬, 기본)</option>
+            <option value="fast">빠르게 (사고 끔)</option>
+          </select>
+        </div>
+        <label for="max-tokens">최대 출력 토큰</label>
+        <p id="max-tokens-hint" class="hint">
+          응답 한 번에 쓸 수 있는 최대 토큰 수 (사고 포함). 크면 긴 페이지도 한 번에 번역하지만 시간이 오래 걸립니다.
+        </p>
+        <div class="row">
+          <input id="max-tokens" type="number" min="1000" max="128000" step="1" aria-describedby="max-tokens-hint" />
+        </div>
         <div class="row">
           <button id="test" type="button">연결 테스트</button>
           <button id="save" type="button">저장</button>
@@ -56,6 +70,9 @@
       <section>
         <h2>저장된 번역</h2>
         <p id="cache-summary"></p>
+        <p class="cleanup">
+          <label>캐시 상한 <input id="cache-max" type="number" min="1" max="9" step="1" /> MB</label>
+        </p>
         <p class="cleanup">
           <label>캐시가 <input id="cleanup-percent" type="number" min="10" max="100" step="1" />% 이상 차면</label>
           <label>최근 <input id="idle-turns" type="number" min="1" max="1000" step="1" />번의 번역에서 쓰이지 않은 번역문을 지웁니다.</label>

@@ -5,8 +5,16 @@ import type { TokenUsage } from "../../shared/usage";
 
 export interface TranslationProvider {
   id: "anthropic" | "openai" | "gemini" | "openai-compatible";
-  translate(req: TranslateRequest, opts: RequestOptions & { signal?: AbortSignal }): Promise<TranslateResponse>;
+  translate(req: TranslateRequest, opts: TranslateOptions): Promise<TranslateResponse>;
   testConnection(opts: RequestOptions): Promise<{ ok: boolean; message?: string }>;
+}
+
+export interface TranslateOptions extends RequestOptions {
+  signal?: AbortSignal;
+  /** 응답 한 번의 최대 토큰 (사고 포함) */
+  maxTokens: number;
+  /** 빠르게: 끌 수 있는 모델이면 사고를 끈다 (SPEC 13장 "번역 방식") */
+  fast: boolean;
 }
 
 export interface RequestOptions {
@@ -38,7 +46,8 @@ export type ProviderErrorKind =
   | "server" // 500, 529 등 5xx
   | "network" // 서버에 닿지 못함
   | "timeout" // 제한 시간 초과
-  | "format" // 응답을 읽을 수 없거나 max_tokens에서 잘림
+  | "format" // 응답을 읽을 수 없음
+  | "truncated" // max_tokens에서 잘림
   | "refusal" // 모델이 응답을 거절함
   | "other";
 

@@ -5,11 +5,14 @@ import { renderShortcut } from "../shared/shortcut";
 import {
   CACHE_CLEANUP_PERCENT_RANGE,
   CACHE_IDLE_TURNS_RANGE,
+  CACHE_MAX_MB_RANGE,
   getSettings,
+  MAX_OUTPUT_TOKENS_RANGE,
   setApiKey,
   setCacheCleanup,
   setGlossary,
   setModel,
+  setTranslationOptions,
 } from "../shared/storage";
 import { getUsage, isEmptyUsage, USAGE_KEY } from "../shared/usage";
 
@@ -19,6 +22,8 @@ const keyInput = element<HTMLInputElement>("#api-key");
 const toggleButton = element<HTMLButtonElement>("#toggle-key");
 const modelSelect = element<HTMLSelectElement>("#model");
 const customModelInput = element<HTMLInputElement>("#custom-model");
+const modeSelect = element<HTMLSelectElement>("#mode");
+const maxTokensInput = element<HTMLInputElement>("#max-tokens");
 const testButton = element<HTMLButtonElement>("#test");
 const saveButton = element<HTMLButtonElement>("#save");
 const status = element<HTMLParagraphElement>("#status");
@@ -31,6 +36,7 @@ const glossaryKeep = element<HTMLTextAreaElement>("#glossary-keep");
 const glossaryMap = element<HTMLTextAreaElement>("#glossary-map");
 const saveGlossaryButton = element<HTMLButtonElement>("#save-glossary");
 const glossaryStatus = element<HTMLParagraphElement>("#glossary-status");
+const cacheMaxInput = element<HTMLInputElement>("#cache-max");
 const cleanupPercentInput = element<HTMLInputElement>("#cleanup-percent");
 const idleTurnsInput = element<HTMLInputElement>("#idle-turns");
 const usageText = element<HTMLParagraphElement>("#usage");
@@ -90,8 +96,13 @@ saveButton.addEventListener("click", async () => {
   if (!model) return showStatus("모델 ID를 입력하세요.", "error");
 
   keyInput.value = apiKey;
+  // 번역 방식과 최대 출력 토큰도 함께 저장한다. 범위를 벗어나면 가까운 값으로 맞춘다 (SPEC 13장).
+  const saved = await getSettings();
+  const maxOutputTokens = clampInteger(maxTokensInput.value, MAX_OUTPUT_TOKENS_RANGE, saved.maxOutputTokens);
+  maxTokensInput.value = String(maxOutputTokens);
   await setApiKey(apiKey);
   await setModel(model);
+  await setTranslationOptions({ translationMode: modeSelect.value === "fast" ? "fast" : "accurate", maxOutputTokens });
   showStatus("저장했습니다.", "success");
 });
 
@@ -115,17 +126,28 @@ function showGlossaryStatus(text: string, kind: "success" | "error"): void {
   glossaryStatus.dataset.kind = kind;
 }
 
-// 캐시 정리 기준 (SPEC 13장 "캐시 정리 기준 조정"): 바꾸면 바로 저장하고, 범위를 벗어나면 가까운 값으로 맞춘다.
-for (const input of [cleanupPercentInput, idleTurnsInput]) {
+// 캐시 상한과 정리 기준 (SPEC 13장 "캐시 상한 설정"·"캐시 정리 기준 조정"): 바꾸면 바로 저장하고,
+// 범위를 벗어나면 가까운 값으로 맞춘다. 저장한 뒤 새 기준으로 바로 정리한다.
+for (const input of [cacheMaxInput, cleanupPercentInput, idleTurnsInput]) {
   input.addEventListener("change", async () => {
     const saved = await getSettings();
-    const percent = clampInteger(cleanupPercentInput.value, CACHE_CLEANUP_PERCENT_RANGE, saved.cacheCleanupPercent);
-    const idleTurns = clampInteger(idleTurnsInput.value, CACHE_IDLE_TURNS_RANGE, saved.cacheIdleTurns);
-    cleanupPercentInput.value = String(percent);
-    idleTurnsInput.value = String(idleTurns);
-    await setCacheCleanup(percent, idleTurns);
+    const values = {
+      cacheMaxMB: clampInteger(cacheMaxInput.value, CACHE_MAX_MB_RANGE, saved.cacheMaxMB),
+      cacheCleanupPercent: clampInteger(cleanupPercentInput.value, CACHE_CLEANUP_PERCENT_RANGE, saved.cacheCleanupPercent),
+      cacheIdleTurns: clampInteger(idleTurnsInput.value, CACHE_IDLE_TURNS_RANGE, saved.cacheIdleTurns),
+    };
+    showCacheSettings(values);
+    await setCacheCleanup(values);
     cacheStatus.textContent = "정리 기준을 저장했습니다.";
+    await sendMessage({ type: "clean-cache" });
+    await renderCacheSummary();
   });
+}
+
+function showCacheSettings(values: { cacheMaxMB: number; cacheCleanupPercent: number; cacheIdleTurns: number }): void {
+  cacheMaxInput.value = String(values.cacheMaxMB);
+  cleanupPercentInput.value = String(values.cacheCleanupPercent);
+  idleTurnsInput.value = String(values.cacheIdleTurns);
 }
 
 /** 정수로 읽어 범위 안으로 맞춘다. 숫자가 아니면(빈 칸 등) fallback */
@@ -181,10 +203,12 @@ async function renderCacheSummary(): Promise<void> {
 }
 
 async function loadSettings(): Promise<void> {
-  const { apiKeys, model, glossary, cacheCleanupPercent, cacheIdleTurns } = await getSettings();
+  const settings = await getSettings();
+  const { apiKeys, model, glossary } = settings;
   showGlossary(glossary);
-  cleanupPercentInput.value = String(cacheCleanupPercent);
-  idleTurnsInput.value = String(cacheIdleTurns);
+  modeSelect.value = settings.translationMode;
+  maxTokensInput.value = String(settings.maxOutputTokens);
+  showCacheSettings(settings);
   // 불러오는 사이에 사용자가 입력을 시작했으면 덮어쓰지 않는다.
   if (!keyInput.value) keyInput.value = apiKeys.anthropic ?? "";
   if (isListedModel(model)) {
