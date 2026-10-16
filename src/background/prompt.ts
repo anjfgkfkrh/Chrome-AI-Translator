@@ -28,7 +28,8 @@ Rules:
 Examples (input segments → output segments, always the same count):
 - ["Sign in to", "your account", "to continue."] → ["계속하려면", "계정에", "로그인하세요."]
 - ["You can", "export", "your traces at any time."] → ["트레이스는 언제든지", "내보낼", "수 있습니다."]
-- ["Before you deploy, review", "the checklist", "and", "the security guide"] → ["배포하기 전에", "체크리스트", "및", "보안 가이드를 검토하세요"]`;
+- ["Before you deploy, review", "the checklist", "and", "the security guide"] → ["배포하기 전에", "체크리스트", "및", "보안 가이드를 검토하세요"]
+- ["From the dropdown, select", "to group the charts."] with "context": "From the dropdown, select llm to group the charts." → ["드롭다운에서", "을 선택해 차트를 그룹화하세요."] (the code llm stays on the page between the two segments, so it is not in the output)`;
 
 /** 응답 JSON 스키마 (구조화된 출력). 배열 개수는 스키마로 강제할 수 없어 validateGroups()로 확인한다. */
 export const RESPONSE_SCHEMA = {
@@ -97,7 +98,8 @@ export function validateGroups(
   const valid: SegmentGroup[] = [];
   const invalid: RequestGroup[] = [];
   for (const group of requested) {
-    const segments = byId.get(group.id)?.segments.map((segment) => segment.trim());
+    let segments = byId.get(group.id)?.segments.map((segment) => segment.trim());
+    if (segments && segments.length > group.segments.length) segments = withoutCopiedContext(group, segments);
     if (segments && segments.length === group.segments.length && segments.every((segment) => segment !== "")) {
       valid.push({ id: group.id, segments });
     } else {
@@ -105,6 +107,37 @@ export function validateGroups(
     }
   }
   return { valid, invalid };
+}
+
+/**
+ * 모델이 문맥에만 있던 텍스트(코드 등)를 세그먼트 한 칸으로 넣어 칸이 남으면 그 칸을 뺀다 (SPEC 13장).
+ * 남는 칸이 보내지 않은 텍스트와 정확히 같고 그 수가 남는 수와 같을 때만 고친다. 아니면 그대로 돌려준다.
+ */
+function withoutCopiedContext(group: RequestGroup, segments: string[]): string[] {
+  const omitted = omittedTexts(group);
+  const extra = segments.length - group.segments.length;
+  const copied = segments.filter((segment) => omitted.has(segment)).length;
+  if (omitted.size === 0 || copied !== extra) return segments;
+  return segments.filter((segment) => !omitted.has(segment));
+}
+
+/** 문맥에서 보낸 세그먼트를 차례로 지우고 남는 텍스트들. 세그먼트가 문맥과 맞지 않으면 빈 집합 */
+function omittedTexts(group: RequestGroup): Set<string> {
+  const omitted = new Set<string>();
+  if (!group.context) return omitted;
+  const context = group.context;
+  let from = 0;
+  const gaps: string[] = [];
+  for (const segment of group.segments) {
+    const text = segment.replace(/\s+/g, " ").trim();
+    const at = context.indexOf(text, from);
+    if (at < 0) return new Set();
+    gaps.push(context.slice(from, at));
+    from = at + text.length;
+  }
+  gaps.push(context.slice(from));
+  for (const gap of gaps) if (gap.trim() !== "") omitted.add(gap.trim());
+  return omitted;
 }
 
 function stripCodeFence(text: string): string {

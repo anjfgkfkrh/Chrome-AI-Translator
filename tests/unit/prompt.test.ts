@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseResponse, systemPrompt, userMessage, validateGroups } from "../../src/background/prompt";
 import { ProviderError } from "../../src/background/providers/types";
+import type { RequestGroup } from "../../src/shared/messages";
 
 describe("systemPrompt (SPEC 4.3)", () => {
   it("4.3의 지시와 용어집을 담는다", () => {
@@ -106,5 +107,70 @@ describe("validateGroups (SPEC 4.3, 13장)", () => {
     );
 
     expect(result.valid).toEqual([{ id: "g1", segments: ["첫째"] }]);
+  });
+});
+
+describe("문맥의 텍스트를 따로 넣은 응답 (SPEC 13장)", () => {
+  // docs.langchain.com/langsmith/observability-llm-tutorial에서 실제로 받은 응답 (코드 llm이 두 번 빠진 문단)
+  const group: RequestGroup = {
+    id: "g112",
+    segments: [
+      "Because you have been logging the",
+      "metadata attribute, you can group monitoring charts by that attribute to compare model performance over time. From",
+      "Monitoring",
+      "in the UI sidebar, click",
+      "Group by",
+      "in the top left corner, select",
+      "Metadata",
+      "from the dropdown, then select",
+      ". The charts update to show results grouped by that attribute. For more on grouping and custom charts, refer to",
+      "Dashboards",
+    ],
+    context:
+      "Because you have been logging the llm metadata attribute, you can group monitoring charts by that attribute to compare model performance over time. From Monitoring in the UI sidebar, click Group by in the top left corner, select Metadata from the dropdown, then select llm. The charts update to show results grouped by that attribute. For more on grouping and custom charts, refer to Dashboards.",
+  };
+  const received = [
+    "지금까지 기록해 온",
+    "메타데이터 속성을 기준으로 모니터링 차트를 그룹화하면 시간에 따른 모델 성능을 비교할 수 있습니다. 먼저",
+    "Monitoring",
+    "을 열고 UI 사이드바에서 클릭한 다음",
+    "Group by",
+    "를 왼쪽 상단 모서리에서 선택하고",
+    "Metadata",
+    "를 드롭다운에서",
+    "llm",
+    "을 선택하세요. 차트가 해당 속성 기준으로 그룹화된 결과로 업데이트됩니다. 그룹화 및 사용자 지정 차트에 대한 자세한 내용은",
+    "Dashboards를 참고하세요.",
+  ];
+
+  it("남는 칸이 보내지 않은 텍스트(코드)와 같으면 그 칸을 빼고 받아들인다", () => {
+    const result = validateGroups([group], [{ id: "g112", segments: received }]);
+
+    expect(result.invalid).toEqual([]);
+    expect(result.valid[0]!.segments).toEqual(received.filter((segment) => segment !== "llm"));
+  });
+
+  it("남는 칸이 보내지 않은 텍스트와 다르면 고치지 않고 형식 오류로 둔다", () => {
+    const wrong = received.map((segment) => (segment === "llm" ? "엘엘엠" : segment));
+
+    expect(validateGroups([group], [{ id: "g112", segments: wrong }]).invalid).toEqual([group]);
+  });
+
+  it("남는 칸이 둘이고 둘 다 보내지 않은 텍스트면 둘 다 뺀다 (문맥에 llm이 두 번 있음)", () => {
+    const twice = ["llm", ...received];
+
+    expect(validateGroups([group], [{ id: "g112", segments: twice }]).valid[0]!.segments).toHaveLength(10);
+  });
+
+  it("같은 칸이 남는 수보다 많으면(어느 것을 뺄지 모름) 고치지 않는다", () => {
+    const ambiguous = ["llm", ...received.slice(1)];
+
+    expect(validateGroups([group], [{ id: "g112", segments: ambiguous }]).invalid).toEqual([group]);
+  });
+
+  it("문맥이 없는 그룹은 고치지 않는다", () => {
+    const plain: RequestGroup = { id: "g1", segments: ["Run", "now"] };
+
+    expect(validateGroups([plain], [{ id: "g1", segments: ["지금", "llm", "실행"] }]).invalid).toEqual([plain]);
   });
 });
