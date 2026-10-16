@@ -99,6 +99,16 @@ textarea {
   flex: none;
 }
 
+details {
+  margin-bottom: 0.75rem;
+}
+
+summary {
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .note {
   margin-top: 1.5rem;
   color: var(--muted);

@@ -687,3 +687,28 @@ describe("OpenRouter (SPEC 13장 \"OpenRouter 추가\")", () => {
     ]);
   });
 });
+
+describe("이 품질로 다시 번역 (SPEC 13장)", () => {
+  it("번역 스크립트에 다시 번역을 맡긴다", async () => {
+    saveKey();
+    chromeMock.tabsSendMessage.mockResolvedValue({ status: "translating", progress: { done: 0, total: 3 }, partial: false });
+
+    expect(await ask({ type: "tab-action", tabId: 7, action: "retranslate" })).toMatchObject({ status: "translating" });
+    expect(chromeMock.tabsSendMessage).toHaveBeenCalledWith(7, { type: "retranslate" }, { frameId: 0 });
+  });
+
+  it("번역 스크립트가 없으면 처음 번역처럼 스크립트를 넣는다", async () => {
+    saveKey();
+
+    await ask({ type: "tab-action", tabId: 7, action: "retranslate" });
+
+    expect(chromeMock.executeScript).toHaveBeenCalledWith({ target: { tabId: 7 }, files: ["content.js"] });
+  });
+
+  it("키가 없으면 옵션 페이지를 연다", async () => {
+    await ask({ type: "tab-action", tabId: 7, action: "retranslate" });
+
+    expect(chromeMock.openOptionsPage).toHaveBeenCalledOnce();
+    expect(chromeMock.executeScript).not.toHaveBeenCalled();
+  });
+});

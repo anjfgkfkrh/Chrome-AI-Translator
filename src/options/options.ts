@@ -1,6 +1,16 @@
 import { glossaryText, parseGlossary, type GlossaryTerms } from "../shared/glossary";
 import { sendMessage } from "../shared/messages";
-import { DEFAULT_MODELS, isListedModel, MODELS, PROVIDERS, providerInfo, type ProviderId } from "../shared/models";
+import {
+  DEFAULT_MODELS,
+  isListedModel,
+  MODELS,
+  PROVIDERS,
+  providerInfo,
+  QUALITY_TIERS,
+  qualityTierOf,
+  qualityTierText,
+  type ProviderId,
+} from "../shared/models";
 import { renderShortcut } from "../shared/shortcut";
 import {
   CACHE_CLEANUP_PERCENT_RANGE,
@@ -13,6 +23,7 @@ import {
   setGlossary,
   setModel,
   setProvider,
+  setQualityTier,
   setTranslationOptions,
 } from "../shared/storage";
 import { getUsage, isEmptyUsage, USAGE_KEY } from "../shared/usage";
@@ -23,6 +34,8 @@ const providerSelect = element<HTMLSelectElement>("#provider");
 const keyLabel = element<HTMLLabelElement>("#api-key-label");
 const keyInput = element<HTMLInputElement>("#api-key");
 const toggleButton = element<HTMLButtonElement>("#toggle-key");
+const qualitySelect = element<HTMLSelectElement>("#quality");
+const advanced = element<HTMLDetailsElement>("#advanced");
 const modelSelect = element<HTMLSelectElement>("#model");
 const customModelInput = element<HTMLInputElement>("#custom-model");
 const customModelList = element<HTMLDataListElement>("#custom-model-list");
@@ -46,6 +59,10 @@ const idleTurnsInput = element<HTMLInputElement>("#idle-turns");
 const usageText = element<HTMLParagraphElement>("#usage");
 
 for (const provider of PROVIDERS) providerSelect.add(new Option(provider.name, provider.id));
+for (const tier of QUALITY_TIERS) qualitySelect.add(new Option(qualityTierText(tier), tier.id));
+/** 고급 설정이 어느 번역 품질 단계와도 같지 않을 때 보이는 항목. 고를 수는 없다. */
+const customQuality = new Option("직접 설정", "custom");
+customQuality.disabled = true;
 
 /**
  * 제공업체마다 화면에 입력한 (저장 전) 키와 모델. 제공업체를 바꿔도 입력한 것을 잃지 않고,
@@ -79,6 +96,25 @@ providerSelect.addEventListener("change", () => {
 modelSelect.addEventListener("change", () => {
   customModelInput.hidden = modelSelect.value !== CUSTOM_MODEL;
   if (!customModelInput.hidden) customModelInput.focus();
+  showQuality();
+});
+customModelInput.addEventListener("input", () => showQuality());
+modeSelect.addEventListener("change", () => showQuality());
+
+// 번역 품질 (SPEC 13장 "번역 품질을 고르는 곳"): 고르면 고급 설정을 그 단계로 바꾸고 바로 저장한다.
+// 저장하는 것은 화면에 보이는 제공업체의 모델과 번역 방식이다. 키와 제공업체는 "저장"을 눌러야 저장된다.
+qualitySelect.addEventListener("change", async () => {
+  const tier = QUALITY_TIERS.find((item) => item.id === qualitySelect.value);
+  if (!tier) return;
+  const model = tier.models[shownProvider];
+  modelSelect.value = model;
+  customModelInput.value = "";
+  customModelInput.hidden = true;
+  modeSelect.value = tier.translationMode;
+  drafts.set(shownProvider, { key: keyInput.value.trim(), model });
+  showQuality();
+  await setQualityTier(tier, shownProvider);
+  showStatus("저장했습니다.", "success");
 });
 
 // 테스트와 저장은 서로 독립: 테스트는 저장 전 입력값과 고른 모델로 한다 (SPEC 13장).
@@ -232,6 +268,18 @@ async function loadSettings(): Promise<void> {
   if (typed) drafts.get(settings.provider)!.key = typed;
   providerSelect.value = settings.provider;
   showProvider(settings.provider);
+  // 단계에 없는 설정이면 고급 설정을 펼쳐 둔다.
+  advanced.open = qualityTierOf(settings) === undefined;
+}
+
+/** 고급 설정(모델·번역 방식)과 같은 번역 품질 단계를 보여 준다. 없으면 "직접 설정" */
+function showQuality(): void {
+  const model = modelSelect.value === CUSTOM_MODEL ? customModelInput.value.trim() : modelSelect.value;
+  const translationMode = modeSelect.value === "fast" ? "fast" : "accurate";
+  const tier = qualityTierOf({ provider: shownProvider, model, translationMode });
+  if (tier) customQuality.remove();
+  else if (!customQuality.isConnected) qualitySelect.add(customQuality);
+  qualitySelect.value = tier?.id ?? customQuality.value;
 }
 
 /** 고른 제공업체의 키 라벨·자리표시자·모델 목록을 보여 주고, 그 제공업체에 입력해 둔 값을 채운다. */
@@ -257,6 +305,7 @@ function showProvider(provider: ProviderId): void {
   customModelInput.value = listed ? "" : draft.model;
   customModelInput.hidden = listed;
   void showModelSuggestions(provider);
+  showQuality();
 }
 
 function rememberDraft(): void {

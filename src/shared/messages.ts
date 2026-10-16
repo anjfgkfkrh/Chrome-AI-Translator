@@ -32,7 +32,8 @@ export interface PageState {
 /** 팝업이 보는 탭 상태: 콘텐츠 스크립트를 넣을 수 없는 페이지면 unsupported */
 export type TabState = PageState | { status: "unsupported" };
 
-export type TabAction = "translate" | "show-original";
+/** retranslate: 기억한 번역문을 버리고 지금 번역 품질로 다시 번역 (SPEC 13장) */
+export type TabAction = "translate" | "show-original" | "retranslate";
 
 export interface TestConnectionMessage {
   type: "test-connection";
@@ -96,7 +97,11 @@ export function sendMessage<M extends Message>(message: M): Promise<Responses[M[
 }
 
 /** 백그라운드 → 콘텐츠 스크립트 (chrome.tabs.sendMessage). 응답은 모두 PageState다. */
-export type ContentCommand = { type: "get-state" } | { type: "translate" } | { type: "show-original" };
+export type ContentCommand =
+  | { type: "get-state" }
+  | { type: "translate" }
+  | { type: "show-original" }
+  | { type: "retranslate" };
 
 /** 콘텐츠 스크립트 ↔ 백그라운드 번역 포트. 포트가 끊기면(탭 닫힘·페이지 이동) 진행 중인 요청을 취소한다. */
 export const TRANSLATE_PORT = "translate";

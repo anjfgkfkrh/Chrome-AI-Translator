@@ -46,6 +46,8 @@ beforeEach(() => {
         return denied;
       case "get-cache-stats":
         return { count: cacheBytes > 0 ? 1 : 0, bytes: cacheBytes };
+      case "tab-action":
+        return { status: "translating", progress: { done: 0, total: 2 }, partial: false };
     }
     return undefined;
   });
@@ -242,5 +244,75 @@ describe("팝업: 제공업체 (SPEC 13장 \"OpenRouter 추가\")", () => {
 
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#action")?.hidden).toBe(false));
     expect(document.querySelector("#action")?.textContent).toBe("번역");
+  });
+});
+
+describe("팝업: 번역 품질 (SPEC 13장 \"번역 품질을 고르는 곳\")", () => {
+  const quality = () => document.querySelector<HTMLSelectElement>("#quality")!;
+  const retranslate = () => document.querySelector<HTMLButtonElement>("#retranslate")!;
+  const translated = { status: "translated", progress: { done: 2, total: 2 }, partial: false };
+
+  function choose(tierId: string): void {
+    quality().value = tierId;
+    quality().dispatchEvent(new Event("change"));
+  }
+
+  it("지금 설정의 단계를 보여 주고, 고르면 그 제공업체의 모델과 번역 방식을 바로 저장한다", async () => {
+    await openPopup();
+    await vi.waitFor(() => expect(document.querySelector<HTMLLabelElement>("#quality-row")!.hidden).toBe(false));
+    expect(quality().value).toBe("haiku-medium");
+
+    choose("haiku-no-thinking");
+
+    await vi.waitFor(() =>
+      expect(chromeMock.storage.settings).toMatchObject({ translationMode: "fast", apiKeys: { anthropic: "sk-ant-saved" } }),
+    );
+  });
+
+  it("단계에 없는 설정이면 고를 수 없는 \"직접 설정\"으로 보인다", async () => {
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, models: { anthropic: "claude-opus-5-5" }, translationMode: "fast" };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(quality().value).toBe("custom"));
+    const custom = quality().selectedOptions[0]!;
+    expect(custom.textContent).toBe("직접 설정");
+    expect(custom.disabled).toBe(true);
+  });
+
+  it("번역된 페이지에서 품질을 바꾸면 \"이 품질로 다시 번역\"이 나타나고, 누르면 다시 번역을 요청한다", async () => {
+    tabState = translated;
+    await openPopup();
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("번역 완료"));
+    expect(retranslate().hidden).toBe(true);
+
+    choose("sonnet-medium");
+
+    await vi.waitFor(() => expect(retranslate().hidden).toBe(false));
+    expect(retranslate().textContent).toBe("이 품질로 다시 번역");
+    retranslate().click();
+    await vi.waitFor(() =>
+      expect(sent("tab-action")).toEqual([{ type: "tab-action", tabId: 7, action: "retranslate" }]),
+    );
+    expect(retranslate().hidden).toBe(true);
+  });
+
+  it("아직 번역하지 않은 페이지에서는 바꿔도 다시 번역 버튼이 없다 (\"번역\"이 새 품질로 번역)", async () => {
+    await openPopup();
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#action")?.hidden).toBe(false));
+
+    choose("sonnet-medium");
+
+    await vi.waitFor(() => expect(chromeMock.storage.settings).toMatchObject({ models: { anthropic: "claude-sonnet-5-5" } }));
+    expect(retranslate().hidden).toBe(true);
+  });
+
+  it("키가 없으면 번역 품질을 보여 주지 않는다", async () => {
+    chromeMock.storage.settings = {};
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("API 키를 먼저 설정하세요"));
+    expect(document.querySelector<HTMLLabelElement>("#quality-row")!.hidden).toBe(true);
   });
 });

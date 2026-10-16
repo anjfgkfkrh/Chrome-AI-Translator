@@ -71,6 +71,18 @@ export class TranslationController {
     return this.run();
   }
 
+  /**
+   * 기억한 번역문을 버리고 지금 설정(번역 품질)으로 처음부터 다시 번역한다 (SPEC 13장 "이 품질로 다시 번역").
+   * 번역 중에는 하지 않는다. 돌려주는 Promise는 원문으로 되돌리고 새 번역을 시작했을 때 풀린다.
+   */
+  async retranslate(): Promise<void> {
+    if (this.running > 0) return;
+    this.watcher.stop();
+    await this.page.reset();
+    this.hasTranslations = false;
+    void this.translate();
+  }
+
   /** 원문 보기 (API 호출 없음). 원문 보기 상태에서는 새 텍스트를 번역하지 않는다 (SPEC 4.6). */
   showOriginal(): Promise<void> {
     this.watcher.stop();

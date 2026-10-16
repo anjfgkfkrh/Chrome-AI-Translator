@@ -35,6 +35,9 @@ function listen(controller: TranslationController): void {
         void controller.translate();
         sendResponse(controller.state());
         return false;
+      case "retranslate":
+        void controller.retranslate().then(() => sendResponse(controller.state()));
+        return true; // 비동기로 응답한다
       case "show-original":
         void controller.showOriginal().then(() => sendResponse(controller.state()));
         return true; // 비동기로 응답한다

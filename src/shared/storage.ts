@@ -1,5 +1,5 @@
 import { sameTerms, type GlossaryTerms } from "./glossary";
-import { DEFAULT_MODELS, DEFAULT_PROVIDER, type ProviderId } from "./models";
+import { DEFAULT_MODELS, DEFAULT_PROVIDER, type ProviderId, type QualityTier } from "./models";
 
 // chrome.storage.local만 쓴다. sync는 API 키가 다른 기기로 동기화되므로 쓰지 않는다 (SPEC 6).
 
@@ -159,6 +159,13 @@ export async function setTranslationOptions(values: TranslationOptions): Promise
   if (values.maxOutputTokens === defaults.maxOutputTokens) delete stored.maxOutputTokens;
   else stored.maxOutputTokens = values.maxOutputTokens;
   await writeStored(stored);
+}
+
+/** 번역 품질 단계를 고르면 그 제공업체의 모델과 번역 방식을 함께 바꾼다 (SPEC 13장 "번역 품질을 고르는 곳"). */
+export async function setQualityTier(tier: QualityTier, provider: ProviderId): Promise<void> {
+  await setModel(tier.models[provider], provider);
+  const { maxOutputTokens } = await getSettings();
+  await setTranslationOptions({ translationMode: tier.translationMode, maxOutputTokens });
 }
 
 type CacheSettings = Pick<Settings, "cacheMaxMB" | "cacheCleanupPercent" | "cacheIdleTurns">;

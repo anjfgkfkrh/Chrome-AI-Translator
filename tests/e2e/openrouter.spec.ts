@@ -33,6 +33,7 @@ test("옵션 페이지: 제공업체를 바꾸면 키·모델이 그 제공업�
   const provider = options.getByLabel("제공업체");
   const model = options.getByLabel("모델", { exact: true });
   await expect(provider).toHaveValue("anthropic");
+  await options.getByText("고급 설정", { exact: true }).click();
 
   await options.getByLabel("Anthropic API 키").fill("sk-ant-e2e");
   await provider.selectOption({ label: "OpenRouter" });

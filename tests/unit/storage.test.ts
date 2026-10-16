@@ -9,8 +9,10 @@ import {
   setGlossary,
   setModel,
   setProvider,
+  setQualityTier,
   setTranslationOptions,
 } from "../../src/shared/storage";
+import { QUALITY_TIERS } from "../../src/shared/models";
 import { installChromeMock } from "./chrome-mock";
 
 let chromeMock: ReturnType<typeof installChromeMock>;
@@ -168,5 +170,20 @@ describe("제공업체 (SPEC 13장 \"OpenRouter 추가\")", () => {
     await setProvider("openrouter");
 
     expect(activeApiKey(await getSettings())).toBeUndefined();
+  });
+});
+
+describe("번역 품질 저장 (SPEC 13장 \"번역 품질을 고르는 곳\")", () => {
+  it("단계를 고르면 그 제공업체의 모델과 번역 방식을 함께 바꾸고, 최대 출력 토큰은 그대로 둔다", async () => {
+    await setTranslationOptions({ translationMode: "accurate", maxOutputTokens: 64_000 });
+
+    await setQualityTier(QUALITY_TIERS.find((tier) => tier.id === "haiku-no-thinking")!, "openrouter");
+
+    expect(chromeMock.storage.settings).toEqual({ translationMode: "fast", maxOutputTokens: 64_000 });
+    expect((await getSettings()).models.openrouter).toBe("anthropic/claude-haiku-5.5");
+
+    await setQualityTier(QUALITY_TIERS.find((tier) => tier.id === "sonnet-medium")!, "anthropic");
+
+    expect(chromeMock.storage.settings).toEqual({ maxOutputTokens: 64_000, models: { anthropic: "claude-sonnet-5-5" } });
   });
 });

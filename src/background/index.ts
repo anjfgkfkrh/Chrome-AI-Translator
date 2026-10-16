@@ -6,6 +6,7 @@ import {
   type Message,
   type PageState,
   type RequestGroup,
+  type TabAction,
   type TabState,
   type TestConnectionResult,
 } from "../shared/messages";
@@ -119,7 +120,7 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
     case "get-tab-state":
       return respond(tabState(message.tabId));
     case "tab-action":
-      return respond(message.action === "translate" ? translateTab(message.tabId) : showOriginal(message.tabId));
+      return respond(tabAction(message.tabId, message.action));
     case "get-shortcut":
       return respond(shortcut());
     case "get-openrouter-models":
@@ -159,6 +160,20 @@ async function translateTab(tabId: number): Promise<TabState> {
     return { status: "unsupported" };
   }
   return tabState(tabId);
+}
+
+function tabAction(tabId: number, action: TabAction): Promise<TabState> {
+  if (action === "retranslate") return retranslateTab(tabId);
+  return action === "translate" ? translateTab(tabId) : showOriginal(tabId);
+}
+
+/** 팝업의 "이 품질로 다시 번역": 키가 없으면 옵션 페이지, 번역 스크립트가 없으면 처음 번역과 같다 (SPEC 13장). */
+async function retranslateTab(tabId: number): Promise<TabState> {
+  if (!activeApiKey(await getSettings())) {
+    await chrome.runtime.openOptionsPage();
+    return tabState(tabId);
+  }
+  return (await sendToTab(tabId, { type: "retranslate" })) ?? translateTab(tabId);
 }
 
 /** 단축키: 번역 중이거나 번역됐으면 원문 보기, 아니면 번역 */

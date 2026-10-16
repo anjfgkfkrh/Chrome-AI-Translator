@@ -65,6 +65,13 @@ export class PageTranslator {
     if (failure) throw failure.error;
   }
 
+  /** 원문으로 되돌리고 기억한 번역문을 모두 버린다. 다음 translate()는 처음부터 다시 요청한다 (SPEC 13장 "이 품질로 다시 번역"). */
+  async reset(): Promise<void> {
+    this.showing = "original";
+    await this.replacer.showOriginals();
+    this.replacer.clear();
+  }
+
   /** 원문 보기 (API 호출 없음) */
   async showOriginal(): Promise<void> {
     this.showing = "original";

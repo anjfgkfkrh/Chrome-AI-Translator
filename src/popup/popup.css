@@ -62,8 +62,24 @@ p {
 }
 
 /* display: flex가 hidden 속성을 덮어쓰지 않도록 */
-.check[hidden] {
+.check[hidden],
+.field[hidden] {
   display: none;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+select {
+  font: inherit;
+}
+
+#retranslate {
+  margin-bottom: 12px;
 }
 
 #auto-message {

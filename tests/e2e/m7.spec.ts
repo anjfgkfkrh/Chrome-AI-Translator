@@ -328,6 +328,7 @@ test("번역 방식·최대 출력 토큰: \"저장\"으로 함께 저장하고,
 }) => {
   await mockTranslationApi(serviceWorker);
   const options = await openOptions(context, extensionId);
+  await options.getByText("고급 설정", { exact: true }).click();
   const mode = options.getByLabel("번역 방식");
   const maxTokens = options.getByLabel("최대 출력 토큰");
   await expect(mode).toHaveValue("accurate");

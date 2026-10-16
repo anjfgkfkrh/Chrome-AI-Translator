@@ -374,3 +374,40 @@ describe("캐시 정리의 턴 (SPEC 13장)", () => {
     expect(ports[1]!.posted[0]).toMatchObject({ type: "translate", newTurn: false });
   });
 });
+
+describe("이 품질로 다시 번역 (SPEC 13장)", () => {
+  it("기억한 번역문을 버리고 원문으로 되돌린 뒤, 처음부터 새 턴으로 다시 요청한다", async () => {
+    document.body.innerHTML = "<p>One</p><p>Two</p>";
+    const controller = newController();
+    const first = controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await first;
+    expect(document.body.textContent).toBe("ONETWO");
+
+    await controller.retranslate();
+
+    expect(document.body.textContent).toBe("OneTwo");
+    expect(ports).toHaveLength(2);
+    expect(ports[1]!.posted[0]).toMatchObject({ type: "translate", newTurn: true });
+    expect(requested().map((group) => group.segments)).toEqual([["One"], ["Two"]]);
+
+    ports[1]!.receive({
+      type: "results",
+      groups: requested().map((group) => ({ id: group.id, segments: group.segments.map((segment) => `[${segment}]`) })),
+    });
+    ports[1]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(document.body.textContent).toBe("[One][Two]"));
+    expect(controller.state().status).toBe("translated");
+  });
+
+  it("번역 중에는 다시 번역하지 않는다", async () => {
+    document.body.innerHTML = "<p>One</p>";
+    const controller = newController();
+    void controller.translate();
+
+    await controller.retranslate();
+
+    expect(ports).toHaveLength(1);
+  });
+});

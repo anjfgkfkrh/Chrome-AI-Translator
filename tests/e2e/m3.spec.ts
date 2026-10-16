@@ -22,6 +22,8 @@ const HANGUL = /\p{Script=Hangul}/u;
 test.describe("옵션 페이지: 모델 선택 (SPEC 4.10, 7.2)", () => {
   test.beforeEach(async ({ page, extensionId }) => {
     await page.goto(`chrome-extension://${extensionId}/options/options.html`);
+    // 모델은 접힌 "고급 설정" 안에 있다 (SPEC 13장 "번역 품질 고르기").
+    await page.getByText("고급 설정", { exact: true }).click();
   });
 
   test("모델 목록을 보여 주고, 기본값은 비용 우선 모델이다", async ({ page }) => {

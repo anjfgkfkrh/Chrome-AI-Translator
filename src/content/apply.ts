@@ -82,6 +82,13 @@ export class TextReplacer {
     });
   }
 
+  /** 기억한 원문·번역문을 모두 버린다. 화면은 바꾸지 않으므로 먼저 showOriginals()로 되돌린다. */
+  clear(): void {
+    this.generation++; // 진행 중인 전환이 있으면 멈춘다
+    for (const node of this.nodes) this.records.delete(node);
+    this.nodes.clear();
+  }
+
   private pass(work: (node: Text, record: TextRecord) => void): Promise<boolean> {
     // 새 전환이 시작되면 진행 중이던 전환은 멈춘다.
     const generation = ++this.generation;

@@ -20,35 +20,42 @@
           <input id="api-key" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
           <button id="toggle-key" type="button">보기</button>
         </div>
-        <label for="model">모델</label>
+        <label for="quality">번역 품질</label>
         <div class="row">
-          <select id="model"></select>
-          <input
-            id="custom-model"
-            type="text"
-            placeholder="모델 ID (예: claude-haiku-5-5)"
-            aria-label="모델 ID"
-            autocomplete="off"
-            spellcheck="false"
-            list="custom-model-list"
-            hidden
-          />
-          <datalist id="custom-model-list"></datalist>
+          <select id="quality"></select>
         </div>
-        <label for="mode">번역 방식</label>
-        <div class="row">
-          <select id="mode">
-            <option value="accurate">정확하게 (사고 켬, 기본)</option>
-            <option value="fast">빠르게 (사고 끔)</option>
-          </select>
-        </div>
-        <label for="max-tokens">최대 출력 토큰</label>
-        <p id="max-tokens-hint" class="hint">
-          응답 한 번에 쓸 수 있는 최대 토큰 수 (사고 포함). 크면 긴 페이지도 한 번에 번역하지만 시간이 오래 걸립니다.
-        </p>
-        <div class="row">
-          <input id="max-tokens" type="number" min="1000" max="128000" step="1" aria-describedby="max-tokens-hint" />
-        </div>
+        <details id="advanced">
+          <summary>고급 설정</summary>
+          <label for="model">모델</label>
+          <div class="row">
+            <select id="model"></select>
+            <input
+              id="custom-model"
+              type="text"
+              placeholder="모델 ID (예: claude-haiku-5-5)"
+              aria-label="모델 ID"
+              autocomplete="off"
+              spellcheck="false"
+              list="custom-model-list"
+              hidden
+            />
+            <datalist id="custom-model-list"></datalist>
+          </div>
+          <label for="mode">번역 방식</label>
+          <div class="row">
+            <select id="mode">
+              <option value="accurate">정확하게 (사고 켬, 기본)</option>
+              <option value="fast">빠르게 (사고 끔)</option>
+            </select>
+          </div>
+          <label for="max-tokens">최대 출력 토큰</label>
+          <p id="max-tokens-hint" class="hint">
+            응답 한 번에 쓸 수 있는 최대 토큰 수 (사고 포함). 크면 긴 페이지도 한 번에 번역하지만 시간이 오래 걸립니다.
+          </p>
+          <div class="row">
+            <input id="max-tokens" type="number" min="1000" max="128000" step="1" aria-describedby="max-tokens-hint" />
+          </div>
+        </details>
         <div class="row">
           <button id="test" type="button">연결 테스트</button>
           <button id="save" type="button">저장</button>

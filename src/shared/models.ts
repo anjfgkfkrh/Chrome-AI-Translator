@@ -64,3 +64,61 @@ export function isListedModel(id: string, provider: ProviderId = "anthropic"): b
 export function listedModel(id: string, provider: ProviderId = "anthropic"): ModelInfo | undefined {
   return MODELS[provider].find((model) => model.id === id);
 }
+
+/** 번역 품질 단계: 모델과 번역 방식을 함께 고른다 (SPEC 13장 "번역 품질 단계"). */
+export interface QualityTier {
+  id: "haiku-no-thinking" | "haiku-medium" | "sonnet-medium" | "opus-medium";
+  /** 모델-사고 설정(쉬운 말) */
+  label: string;
+  description: string;
+  /** 제공업체마다 이 단계의 모델 */
+  models: Readonly<Record<ProviderId, string>>;
+  translationMode: "accurate" | "fast";
+}
+
+export const QUALITY_TIERS: readonly QualityTier[] = [
+  {
+    id: "haiku-no-thinking",
+    label: "Haiku5.5-no-thinking(빠르게)",
+    description: "가장 빠름, 가끔 어색함",
+    models: { anthropic: "claude-haiku-5-5", openrouter: "anthropic/claude-haiku-5.5" },
+    translationMode: "fast",
+  },
+  {
+    id: "haiku-medium",
+    label: "Haiku5.5-medium(기본)",
+    description: "빠르고 저렴함",
+    models: { anthropic: "claude-haiku-5-5", openrouter: "anthropic/claude-haiku-5.5" },
+    translationMode: "accurate",
+  },
+  {
+    id: "sonnet-medium",
+    label: "Sonnet5.5-medium(정확하게)",
+    description: "더 자연스러움, 비용 약 20배",
+    models: { anthropic: "claude-sonnet-5-5", openrouter: "anthropic/claude-sonnet-5.5" },
+    translationMode: "accurate",
+  },
+  {
+    id: "opus-medium",
+    label: "Opus5.5-medium(최고 품질)",
+    description: "가장 정확함, 비용 약 40배",
+    models: { anthropic: "claude-opus-5-5", openrouter: "anthropic/claude-opus-5.5" },
+    translationMode: "accurate",
+  },
+];
+
+/** 선택 상자에 보일 글: "이름 — 설명" */
+export function qualityTierText(tier: QualityTier): string {
+  return `${tier.label} — ${tier.description}`;
+}
+
+/** 이 설정과 같은 단계. 어느 단계와도 같지 않으면 undefined ("직접 설정") */
+export function qualityTierOf(settings: {
+  provider: ProviderId;
+  model: string;
+  translationMode: "accurate" | "fast";
+}): QualityTier | undefined {
+  return QUALITY_TIERS.find(
+    (tier) => tier.models[settings.provider] === settings.model && tier.translationMode === settings.translationMode,
+  );
+}
