@@ -532,3 +532,30 @@ describe("번역 방식과 캐시 (SPEC 13장)", () => {
     expect(entry).not.toHaveProperty("f");
   });
 });
+
+describe("빠르게의 형식 오류 재요청 (SPEC 13장)", () => {
+  it("형식이 틀린 그룹만, 사고를 켜고 다시 보낸다. 다시 번역한 그룹은 캐시에 정확하게로 저장한다", async () => {
+    let call = 0;
+    const fetchMock = stubFetch(async (_input, init) => {
+      const groups = requestedGroups(init);
+      // 첫 응답은 g1에 칸을 하나 더 붙여 틀리게 돌려준다.
+      const results = uppercase(groups).map((g) => (call === 0 && g.id === "g1" ? { ...g, segments: [...g.segments, "X"] } : g));
+      call++;
+      return translationResponse(results);
+    });
+
+    const { delivered, promise } = run([group("g1", "Hello"), group("g2", "World")], {
+      settings: { translationMode: "fast" },
+    });
+    await promise;
+
+    expect(requestedIds(fetchMock)).toEqual([["g1", "g2"], ["g1"]]);
+    expect(requestBody(fetchMock.mock.calls[0]![1]).thinking).toEqual({ type: "disabled" });
+    expect(requestBody(fetchMock.mock.calls[1]![1])).not.toHaveProperty("thinking");
+    expect(delivered.map((g) => g.id).sort()).toEqual(["g1", "g2"]);
+    const entries = Object.entries(chromeMock.storage).filter(([key]) => key.startsWith("t:"));
+    const bySegments = Object.fromEntries(entries.map(([, entry]) => [(entry as { s: string[] }).s[0], entry]));
+    expect(bySegments.HELLO).not.toHaveProperty("f");
+    expect(bySegments.WORLD).toMatchObject({ f: 1 });
+  });
+});

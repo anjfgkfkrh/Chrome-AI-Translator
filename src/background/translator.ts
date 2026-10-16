@@ -54,6 +54,7 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
 
   const assembler = new Assembler(misses, job.settings.batchMaxNodes);
   const saving: Promise<void>[] = [];
+  const fastIds = new Set<string>();
   let fatal: { error: unknown } | undefined;
   let lastError: unknown;
 
@@ -61,9 +62,12 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
     pack(assembler.pieces, job.settings.batchMaxNodes).map(async (batch) => {
       try {
         const outcome = await limiter.run(() => translateBatch(job, batch, signal), signal);
+        for (const id of outcome.fastIds) fastIds.add(id);
         const done = assembler.complete(outcome.valid, outcome.failed);
         if (done.length > 0) {
-          saving.push(saveToCache(job, done, keyById));
+          // 조각 하나라도 빠르게로 번역했으면 빠르게로 저장한다.
+          const isFast = (id: string) => assembler.piecesOf(id).some((piece) => fastIds.has(piece));
+          saving.push(saveToCache(job, done, keyById, isFast));
           job.onResults(done);
         }
         if (outcome.error !== undefined) lastError = outcome.error;
@@ -108,22 +112,29 @@ async function saveToCache(
   job: TranslationJob,
   groups: readonly SegmentGroup[],
   keyById: ReadonlyMap<string, string>,
+  isFast: (id: string) => boolean,
 ): Promise<void> {
-  const translations = new Map<string, string[]>();
+  const accurate = new Map<string, string[]>();
+  const fast = new Map<string, string[]>();
   for (const group of groups) {
     const key = keyById.get(group.id);
-    if (key) translations.set(key, group.segments);
+    if (key) (isFast(group.id) ? fast : accurate).set(key, group.segments);
   }
-  const fast = thinkingDisabled(job.settings);
-  await storeCache(translations, job.turn, cacheLimits(job.settings), { fast }).catch((err: unknown) => {
+  const limits = cacheLimits(job.settings);
+  try {
+    await storeCache(accurate, job.turn, limits);
+    await storeCache(fast, job.turn, limits, { fast: true });
+  } catch (err) {
     console.warn("[AITranslator] 번역을 캐시에 저장하지 못했습니다.", err);
-  });
+  }
 }
 
 interface BatchOutcome {
   valid: SegmentGroup[];
   failed: RequestGroup[];
   error?: unknown;
+  /** 사고를 끄고(빠르게) 번역한 그룹 ID. 캐시에 빠르게로 표시한다. */
+  fastIds: Set<string>;
 }
 
 /**
@@ -132,13 +143,17 @@ interface BatchOutcome {
  */
 async function translateBatch(job: TranslationJob, groups: RequestGroup[], signal: AbortSignal): Promise<BatchOutcome> {
   const valid: SegmentGroup[] = [];
+  const fastIds = new Set<string>();
   let pending = groups;
   let error: unknown;
   for (let round = 0; round < 2 && pending.length > 0; round++) {
+    // 빠르게여도 재요청은 사고를 켜고 보낸다. 사고를 끄면 칸 수를 자주 어기기 때문이다 (SPEC 13장).
+    const fast = round === 0 && thinkingDisabled(job.settings);
     try {
-      const response = await requestWithRetry(job, pending, signal);
+      const response = await requestWithRetry(job, pending, signal, fast);
       const checked = validateGroups(pending, response.groups);
       valid.push(...checked.valid);
+      if (fast) for (const group of checked.valid) fastIds.add(group.id);
       pending = checked.invalid;
       if (pending.length > 0) error = new ProviderError("format", "응답 형식이 맞지 않는 그룹이 있습니다.");
     } catch (err) {
@@ -149,7 +164,12 @@ async function translateBatch(job: TranslationJob, groups: RequestGroup[], signa
         const [first, second] = halves(pending);
         const a = await translateBatch(job, first, signal);
         const b = await translateBatch(job, second, signal);
-        return { valid: [...valid, ...a.valid, ...b.valid], failed: [...a.failed, ...b.failed], error: b.error ?? a.error };
+        return {
+          valid: [...valid, ...a.valid, ...b.valid],
+          failed: [...a.failed, ...b.failed],
+          error: b.error ?? a.error,
+          fastIds: new Set([...fastIds, ...a.fastIds, ...b.fastIds]),
+        };
       }
       // 파싱 실패만 배치를 다시 보낸다. 재시도까지 실패한 오류, 그룹 하나도 잘린 응답, refusal은 원문으로 둔다.
       if (err.kind !== "format") break;
@@ -161,11 +181,11 @@ async function translateBatch(job: TranslationJob, groups: RequestGroup[], signa
       error instanceof Error ? error.message : error,
     );
   }
-  return { valid, failed: pending, error: pending.length > 0 ? error : undefined };
+  return { valid, failed: pending, error: pending.length > 0 ? error : undefined, fastIds };
 }
 
 /** HTTP 단계 재시도 (SPEC 5.4) */
-async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], signal: AbortSignal) {
+async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], signal: AbortSignal, fast: boolean) {
   let retries = 0;
   let networkRetries = 0;
   for (;;) {
@@ -178,7 +198,7 @@ async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], sig
           signal,
           onUsage: job.onUsage,
           maxTokens: job.settings.maxOutputTokens,
-          fast: job.settings.translationMode === "fast",
+          fast,
         },
       );
     } catch (err) {
@@ -313,6 +333,11 @@ class Assembler {
 
   get failedCount(): number {
     return this.failed.size;
+  }
+
+  /** 그룹을 나눠 보낸 조각의 ID (나누지 않았으면 그룹 ID 하나) */
+  piecesOf(id: string): string[] {
+    return [...this.owners].filter(([, owner]) => owner.id === id).map(([piece]) => piece);
   }
 
   complete(valid: readonly SegmentGroup[], failed: readonly RequestGroup[]): SegmentGroup[] {
