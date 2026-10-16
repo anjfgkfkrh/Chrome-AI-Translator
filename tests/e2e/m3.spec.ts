@@ -54,7 +54,8 @@ test.describe("옵션 페이지: 모델 선택 (SPEC 4.10, 7.2)", () => {
     await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("저장했습니다.");
     expect(await readStorage(serviceWorker)).toEqual({
-      settings: { apiKeys: { anthropic: "sk-ant-e2e-typed" }, model: "claude-sonnet-5-5" },
+      // 모델은 제공업체마다 따로 기억한다 (SPEC 13장 "OpenRouter 세부").
+      settings: { apiKeys: { anthropic: "sk-ant-e2e-typed" }, models: { anthropic: "claude-sonnet-5-5" } },
     });
   });
 

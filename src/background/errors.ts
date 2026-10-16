@@ -6,8 +6,14 @@ export const NO_API_KEY_MESSAGE = "API 키를 먼저 설정하세요";
 /**
  * 오류를 사용자 안내 문구로 바꾼다 (SPEC 13장 "M1 화면 문구", "M4 화면 문구"). API 키는 문구에 넣지 않는다.
  * purpose에 따라 그 밖의 오류 앞에 "연결 실패:"(연결 테스트) 또는 "번역 실패:"(번역)를 붙인다.
+ * providerName은 서버 오류 문구에 쓴다 ("Anthropic 서버가 혼잡합니다." / "OpenRouter 서버가 혼잡합니다.").
  */
-export function errorMessage(err: unknown, model: string, purpose: "connection" | "translation" = "connection"): string {
+export function errorMessage(
+  err: unknown,
+  model: string,
+  purpose: "connection" | "translation" = "connection",
+  providerName = "Anthropic",
+): string {
   if (err instanceof ProviderError) {
     switch (err.kind) {
       case "auth":
@@ -17,7 +23,9 @@ export function errorMessage(err: unknown, model: string, purpose: "connection" 
       case "rate_limit":
         return "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.";
       case "server":
-        return "Anthropic 서버가 혼잡합니다. 잠시 후 다시 시도하세요.";
+        return `${providerName} 서버가 혼잡합니다. 잠시 후 다시 시도하세요.`;
+      case "credits":
+        return "OpenRouter 크레딧이 부족합니다. 크레딧을 충전하세요.";
       case "network":
       case "timeout":
         return "네트워크에 연결할 수 없습니다. 인터넷 연결을 확인하세요.";

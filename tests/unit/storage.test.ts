@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  activeApiKey,
   defaultSettings,
   getSettings,
   setApiKey,
   setAutoTranslateOrigins,
   setCacheCleanup,
   setGlossary,
+  setModel,
+  setProvider,
   setTranslationOptions,
 } from "../../src/shared/storage";
 import { installChromeMock } from "./chrome-mock";
@@ -29,6 +32,7 @@ describe("설정 저장소", () => {
       },
       autoTranslateOrigins: [],
       model: "claude-haiku-5-5",
+      models: { anthropic: "claude-haiku-5-5", openrouter: "anthropic/claude-haiku-5.5" },
       translationMode: "accurate",
       maxOutputTokens: 32_000,
       cacheMaxMB: 8,
@@ -111,5 +115,58 @@ describe("용어집 저장 (SPEC 4.7, 13장 \"용어집 적용\")", () => {
     await setGlossary({ keep: defaults.keep, map: {} });
 
     expect(chromeMock.storage).toEqual({ settings: {} });
+  });
+});
+
+describe("제공업체 (SPEC 13장 \"OpenRouter 추가\")", () => {
+  it("키와 모델을 제공업체마다 따로 저장하고, 고른 제공업체의 것을 쓴다", async () => {
+    await setApiKey("sk-ant-a", "anthropic");
+    await setApiKey("sk-or-b", "openrouter");
+    await setModel("claude-sonnet-5-5", "anthropic");
+    await setModel("google/gemini-3.5-flash", "openrouter");
+
+    let settings = await getSettings();
+    expect(settings).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5" });
+    expect(activeApiKey(settings)).toBe("sk-ant-a");
+
+    await setProvider("openrouter");
+    settings = await getSettings();
+    expect(settings).toMatchObject({ provider: "openrouter", model: "google/gemini-3.5-flash" });
+    expect(activeApiKey(settings)).toBe("sk-or-b");
+    expect(chromeMock.storage).toEqual({
+      settings: {
+        provider: "openrouter",
+        apiKeys: { anthropic: "sk-ant-a", openrouter: "sk-or-b" },
+        models: { anthropic: "claude-sonnet-5-5", openrouter: "google/gemini-3.5-flash" },
+      },
+    });
+  });
+
+  it("제공업체가 하나였을 때 저장한 모델은 Anthropic 모델로 읽고, 다음에 저장할 때 옮긴다", async () => {
+    chromeMock.storage.settings = { model: "claude-opus-5-5" };
+
+    expect((await getSettings()).models).toEqual({ anthropic: "claude-opus-5-5", openrouter: "anthropic/claude-haiku-5.5" });
+
+    await setModel("anthropic/claude-sonnet-5.5", "openrouter");
+    expect(chromeMock.storage).toEqual({
+      settings: { models: { anthropic: "claude-opus-5-5", openrouter: "anthropic/claude-sonnet-5.5" } },
+    });
+  });
+
+  it("기본값(Anthropic, 각 제공업체의 비용 우선 모델)은 저장값을 남기지 않는다", async () => {
+    await setProvider("openrouter");
+    await setModel("google/gemini-3.5-flash", "openrouter");
+
+    await setProvider("anthropic");
+    await setModel("anthropic/claude-haiku-5.5", "openrouter");
+
+    expect(chromeMock.storage).toEqual({ settings: {} });
+  });
+
+  it("고른 제공업체의 키가 없으면 다른 제공업체의 키가 있어도 키가 없는 것으로 본다", async () => {
+    await setApiKey("sk-ant-a", "anthropic");
+    await setProvider("openrouter");
+
+    expect(activeApiKey(await getSettings())).toBeUndefined();
   });
 });

@@ -112,6 +112,15 @@ describe("AnthropicProvider.testConnection", () => {
   });
 });
 
+describe("AnthropicProvider.canDisableThinking", () => {
+  it("목록에서 끄는 값이 있는 모델만 끌 수 있다 (Opus·직접 입력한 모델은 끌 수 없음)", async () => {
+    expect(await provider.canDisableThinking("claude-haiku-5-5")).toBe(true);
+    expect(await provider.canDisableThinking("claude-sonnet-5-5")).toBe(true);
+    expect(await provider.canDisableThinking("claude-opus-5-5")).toBe(false);
+    expect(await provider.canDisableThinking("claude-custom-model")).toBe(false);
+  });
+});
+
 describe("AnthropicProvider.translate", () => {
   /** 기본 설정: 정확하게, 최대 출력 토큰 32,000 */
   const options = { maxTokens: 32_000, fast: false };

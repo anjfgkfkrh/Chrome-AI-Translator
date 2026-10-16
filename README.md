@@ -1,6 +1,6 @@
 # AITranslator
 
-Claude(Anthropic API)로 웹 페이지를 한국어로 번역하는 Chrome 확장 프로그램입니다.
+Claude(Anthropic API) 또는 OpenRouter의 모델로 웹 페이지를 한국어로 번역하는 Chrome 확장 프로그램입니다.
 
 - 페이지의 **텍스트 노드 값만** 바꿉니다. 요소, 속성, 이벤트는 그대로라서 번역한 뒤에도 메뉴, 검색, 버튼이 원래대로 동작합니다.
 - "원문 보기"를 누르면 API 호출 없이 곧바로 원문으로 돌아갑니다.
@@ -10,7 +10,7 @@ Claude(Anthropic API)로 웹 페이지를 한국어로 번역하는 Chrome 확�
 
 ## 설치
 
-필요한 것: Chrome, Node.js와 npm, [Anthropic API 키](https://console.anthropic.com/)
+필요한 것: Chrome, Node.js와 npm, [Anthropic API 키](https://console.anthropic.com/) 또는 [OpenRouter API 키](https://openrouter.ai/settings/keys)
 
 ```sh
 npm install
@@ -21,7 +21,7 @@ npm run build
 2. 오른쪽 위의 "개발자 모드"를 켭니다.
 3. "압축해제된 확장 프로그램을 로드합니다"를 누르고 `dist` 폴더를 고릅니다.
 
-설치하면 옵션 페이지가 열립니다. API 키를 넣고 "연결 테스트"로 확인한 뒤 "저장"을 누르세요. 아이콘은 따로 없어서 Chrome 기본 아이콘으로 보입니다.
+설치하면 옵션 페이지가 열립니다. 제공업체를 고르고 API 키를 넣고 "연결 테스트"로 확인한 뒤 "저장"을 누르세요. 아이콘은 따로 없어서 Chrome 기본 아이콘으로 보입니다.
 
 ## 사용법
 
@@ -39,7 +39,8 @@ npm run build
 
 ### 옵션 페이지
 
-- **API 키와 모델:** Claude Haiku 5.5(비용 우선, 기본) / Sonnet 5.5(균형) / Opus 5.5(품질 우선) / 직접 입력
+- **제공업체:** Anthropic(기본) 또는 OpenRouter. 키와 모델은 제공업체마다 따로 저장되고, 고른 제공업체로 번역합니다.
+- **API 키와 모델:** Claude Haiku 5.5(비용 우선, 기본) / Sonnet 5.5(균형) / Opus 5.5(품질 우선) / 직접 입력. OpenRouter의 "직접 입력"은 OpenRouter의 모델 목록을 자동 완성으로 제안합니다(예: `google/gemini-3.5-flash`). OpenRouter의 연결 테스트는 토큰을 쓰지 않습니다(키와 모델 ID만 확인).
 - **번역 방식:** "정확하게(사고 켬)"가 기본입니다. "빠르게(사고 끔)"는 5~10배 빠르지만, 링크가 낀 문장처럼 어려운 문장의 뜻이 빠질 수 있습니다. Opus는 사고를 끌 수 없어 늘 정확하게로 번역합니다. 빠르게로 저장된 번역은 정확하게로 번역할 때 다시 번역해 바꿔 넣습니다.
 - **최대 출력 토큰:** 응답 한 번에 쓸 수 있는 토큰 수(사고 포함, 기본 32,000, 1,000~128,000). 응답이 잘리면 그 묶음을 반으로 나눠 다시 보내므로 긴 페이지도 끝까지 번역합니다.
 - **용어집:** "번역하지 않을 단어"와 "지정 번역어"(한 줄에 하나, `원어 = 번역어`). 바꾼 뒤 새로 번역하는 것부터 적용됩니다.
@@ -58,12 +59,13 @@ npm run build
 | `storage` | 설정, 번역 캐시, 사용량을 이 브라우저의 `chrome.storage.local`에 저장 (다른 기기로 동기화하지 않음) |
 | `activeTab`, `scripting` | 팝업·단축키·우클릭으로 번역할 때 지금 탭에 번역 스크립트를 넣음 |
 | `contextMenus` | 우클릭 메뉴 |
-| `https://api.anthropic.com/*` | 백그라운드에서 Claude API 호출 |
+| `https://api.anthropic.com/*` | 백그라운드에서 Claude API 호출 (OpenRouter는 모든 출처의 요청을 허용해서 권한을 따로 받지 않습니다) |
 | 선택 권한 `https://*/*`, `http://*/*` | "이 사이트는 항상 번역"을 켤 때 그 사이트만 요청 |
 
-- 번역하는 **페이지 텍스트는 Anthropic API로 전송됩니다.** 다른 서버로는 보내지 않습니다.
+- 번역하는 **페이지 텍스트는 고른 제공업체(Anthropic API 또는 OpenRouter)로 전송됩니다.** OpenRouter는 고른 모델의 제공업체로 전달합니다. 그 밖의 서버로는 보내지 않습니다. OpenRouter 모델 목록은 키 없이 하루에 한 번 받습니다.
 - API 키는 이 브라우저의 `chrome.storage.local`에만 저장하고 백그라운드 서비스 워커에서만 씁니다. 웹 페이지나 콘텐츠 스크립트로는 보내지 않습니다.
-- 비용은 고른 모델과 번역한 양에 따라 Anthropic 계정에 청구됩니다. 옵션 페이지의 사용량으로 확인할 수 있습니다.
+- 비용은 고른 모델과 번역한 양에 따라 Anthropic 계정이나 OpenRouter 크레딧에서 나갑니다. 옵션 페이지의 사용량(두 제공업체 합계)으로 확인할 수 있습니다.
+- OpenRouter 키에는 [키 설정](https://openrouter.ai/settings/keys)에서 사용 한도를 걸어 두세요. OpenRouter 키로는 여러 모델을 쓸 수 있어 한도가 없으면 위험합니다.
 
 ## 알려진 제한
 
@@ -85,10 +87,10 @@ npm run test:live   # SPEC 10.3: 실제 docs.langchain.com + 목 API (인터넷 
 
 - Playwright가 처음이면 `npx playwright install chromium`으로 브라우저를 받습니다.
 - E2E는 `dist-test`(테스트용 빌드)를 씁니다. 클릭 없이 스크립트를 넣을 수 있도록 픽스처 주소(`http://aitranslator.test/*`)와 `https://docs.langchain.com/*` 권한을 더한 빌드입니다. 배포용 `dist`의 manifest는 그대로입니다.
-- 실제 API를 쓰는 테스트(연결 테스트, 10.4 픽스처, docs.langchain.com 번역)는 `ANTHROPIC_API_KEY`가 있을 때만 돌고, 없으면 건너뜁니다. 소액의 API 비용이 듭니다.
+- 실제 API를 쓰는 테스트(연결 테스트, 10.4 픽스처, docs.langchain.com 번역)는 `ANTHROPIC_API_KEY`가 있을 때만, OpenRouter 테스트는 `OPENROUTER_API_KEY`가 있을 때만 돌고, 없으면 건너뜁니다. 소액의 API 비용이 듭니다.
 
   ```sh
-  ANTHROPIC_API_KEY=sk-ant-... npm run test:e2e
+  ANTHROPIC_API_KEY=sk-ant-... OPENROUTER_API_KEY=sk-or-... npm run test:e2e
   ```
 
   키는 환경 변수로만 넘기고 저장소에 커밋하지 않습니다.

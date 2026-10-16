@@ -1,3 +1,5 @@
+import type { ProviderId } from "./models";
+
 // 확장 프로그램 내부 메시지 형식.
 // API 키는 옵션 페이지 → 백그라운드 방향으로만 보낸다. 콘텐츠 스크립트와 주고받는 메시지에는 넣지 않는다 (SPEC 7.1).
 
@@ -34,6 +36,8 @@ export type TabAction = "translate" | "show-original";
 
 export interface TestConnectionMessage {
   type: "test-connection";
+  /** 화면에서 고른 (저장 전) 제공업체 */
+  provider: ProviderId;
   /** 입력란에 있는 (저장 전) 키 */
   apiKey: string;
   /** 화면에서 고른 (저장 전) 모델 */
@@ -46,6 +50,8 @@ export type Message =
   | { type: "get-tab-state"; tabId: number }
   | { type: "tab-action"; tabId: number; action: TabAction }
   | { type: "get-shortcut" }
+  // 옵션 페이지의 OpenRouter 모델 자동 완성 (SPEC 13장 "OpenRouter 모델 고르기")
+  | { type: "get-openrouter-models" }
   | { type: "get-cache-stats" }
   | { type: "clear-cache" }
   // 캐시 상한·정리 기준을 바꾼 뒤 바로 정리한다
@@ -70,6 +76,8 @@ interface Responses {
   "tab-action": TabState;
   /** 할당된 단축키. 없으면 빈 문자열 */
   "get-shortcut": string;
+  /** OpenRouter 모델 ID. 받지 못하면 빈 배열 */
+  "get-openrouter-models": string[];
   "get-cache-stats": { count: number; bytes: number };
   "clear-cache": void;
   "clean-cache": void;

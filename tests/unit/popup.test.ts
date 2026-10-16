@@ -224,3 +224,23 @@ describe("팝업: 캐시 사용량 (SPEC 13장 \"팝업의 캐시 사용량\")",
     await vi.waitFor(() => expect(usage()).toBe("캐시 0 MB / 8 MB (0%)"));
   });
 });
+
+describe("팝업: 제공업체 (SPEC 13장 \"OpenRouter 추가\")", () => {
+  it("OpenRouter를 골랐는데 그 키가 없으면, Anthropic 키가 있어도 \"API 키를 먼저 설정하세요\"", async () => {
+    chromeMock.storage.settings = { provider: "openrouter", apiKeys: { anthropic: "sk-ant-saved" } };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("API 키를 먼저 설정하세요"));
+    expect(autoRow().hidden).toBe(true);
+  });
+
+  it("OpenRouter 키가 있으면 번역할 수 있다", async () => {
+    chromeMock.storage.settings = { provider: "openrouter", apiKeys: { openrouter: "sk-or-saved" } };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#action")?.hidden).toBe(false));
+    expect(document.querySelector("#action")?.textContent).toBe("번역");
+  });
+});

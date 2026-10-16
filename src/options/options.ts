@@ -1,6 +1,6 @@
 import { glossaryText, parseGlossary, type GlossaryTerms } from "../shared/glossary";
 import { sendMessage } from "../shared/messages";
-import { DEFAULT_MODEL_ID, isListedModel, MODELS } from "../shared/models";
+import { DEFAULT_MODELS, isListedModel, MODELS, PROVIDERS, providerInfo, type ProviderId } from "../shared/models";
 import { renderShortcut } from "../shared/shortcut";
 import {
   CACHE_CLEANUP_PERCENT_RANGE,
@@ -12,16 +12,20 @@ import {
   setCacheCleanup,
   setGlossary,
   setModel,
+  setProvider,
   setTranslationOptions,
 } from "../shared/storage";
 import { getUsage, isEmptyUsage, USAGE_KEY } from "../shared/usage";
 
 const CUSTOM_MODEL = "custom";
 
+const providerSelect = element<HTMLSelectElement>("#provider");
+const keyLabel = element<HTMLLabelElement>("#api-key-label");
 const keyInput = element<HTMLInputElement>("#api-key");
 const toggleButton = element<HTMLButtonElement>("#toggle-key");
 const modelSelect = element<HTMLSelectElement>("#model");
 const customModelInput = element<HTMLInputElement>("#custom-model");
+const customModelList = element<HTMLDataListElement>("#custom-model-list");
 const modeSelect = element<HTMLSelectElement>("#mode");
 const maxTokensInput = element<HTMLInputElement>("#max-tokens");
 const testButton = element<HTMLButtonElement>("#test");
@@ -41,12 +45,14 @@ const cleanupPercentInput = element<HTMLInputElement>("#cleanup-percent");
 const idleTurnsInput = element<HTMLInputElement>("#idle-turns");
 const usageText = element<HTMLParagraphElement>("#usage");
 
-// 모델 목록은 src/shared/models.ts 한 곳에서 가져온다 (SPEC 7.2).
-for (const model of MODELS) {
-  const suffix = model.id === DEFAULT_MODEL_ID ? " (기본)" : "";
-  modelSelect.add(new Option(`${model.name} — ${model.description}${suffix}`, model.id));
-}
-modelSelect.add(new Option("직접 입력", CUSTOM_MODEL));
+for (const provider of PROVIDERS) providerSelect.add(new Option(provider.name, provider.id));
+
+/**
+ * 제공업체마다 화면에 입력한 (저장 전) 키와 모델. 제공업체를 바꿔도 입력한 것을 잃지 않고,
+ * "저장"하면 모두 저장한다 (SPEC 13장 "OpenRouter 세부": 제공업체마다 따로 기억).
+ */
+const drafts = new Map<ProviderId, { key: string; model: string }>();
+let shownProvider: ProviderId = "anthropic";
 
 void loadSettings();
 void renderAutoSites();
@@ -65,6 +71,11 @@ toggleButton.addEventListener("click", () => {
   toggleButton.textContent = show ? "숨기기" : "보기";
 });
 
+providerSelect.addEventListener("change", () => {
+  rememberDraft();
+  showProvider(providerSelect.value as ProviderId);
+});
+
 modelSelect.addEventListener("change", () => {
   customModelInput.hidden = modelSelect.value !== CUSTOM_MODEL;
   if (!customModelInput.hidden) customModelInput.focus();
@@ -72,6 +83,7 @@ modelSelect.addEventListener("change", () => {
 
 // 테스트와 저장은 서로 독립: 테스트는 저장 전 입력값과 고른 모델로 한다 (SPEC 13장).
 testButton.addEventListener("click", async () => {
+  const provider = shownProvider;
   const apiKey = keyInput.value.trim();
   const model = selectedModel();
   if (!apiKey) return showStatus("API 키를 입력하세요.", "error");
@@ -80,7 +92,7 @@ testButton.addEventListener("click", async () => {
   testButton.disabled = true;
   showStatus("연결 확인 중…", "pending");
   try {
-    const result = await sendMessage({ type: "test-connection", apiKey, model });
+    const result = await sendMessage({ type: "test-connection", provider, apiKey, model });
     showStatus(result.message ?? "", result.ok ? "success" : "error");
   } catch (err) {
     showStatus(`연결 실패: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -89,19 +101,23 @@ testButton.addEventListener("click", async () => {
   }
 });
 
-// "저장"은 키와 모델을 함께 저장한다. 키가 빈 칸이면 저장된 키를 지운다 (SPEC 13장).
+// "저장"은 제공업체와 키·모델을 함께 저장한다. 키가 빈 칸이면 그 제공업체의 저장된 키를 지운다 (SPEC 13장).
 saveButton.addEventListener("click", async () => {
-  const apiKey = keyInput.value.trim();
   const model = selectedModel();
   if (!model) return showStatus("모델 ID를 입력하세요.", "error");
 
-  keyInput.value = apiKey;
+  keyInput.value = keyInput.value.trim();
+  rememberDraft();
   // 번역 방식과 최대 출력 토큰도 함께 저장한다. 범위를 벗어나면 가까운 값으로 맞춘다 (SPEC 13장).
   const saved = await getSettings();
   const maxOutputTokens = clampInteger(maxTokensInput.value, MAX_OUTPUT_TOKENS_RANGE, saved.maxOutputTokens);
   maxTokensInput.value = String(maxOutputTokens);
-  await setApiKey(apiKey);
-  await setModel(model);
+  await setProvider(shownProvider);
+  for (const [provider, draft] of drafts) {
+    await setApiKey(draft.key, provider);
+    // 다른 제공업체에서 "직접 입력"을 비워 둔 채 바꿨으면 그 모델은 그대로 둔다.
+    if (draft.model) await setModel(draft.model, provider);
+  }
   await setTranslationOptions({ translationMode: modeSelect.value === "fast" ? "fast" : "accurate", maxOutputTokens });
   showStatus("저장했습니다.", "success");
 });
@@ -204,20 +220,59 @@ async function renderCacheSummary(): Promise<void> {
 
 async function loadSettings(): Promise<void> {
   const settings = await getSettings();
-  const { apiKeys, model, glossary } = settings;
-  showGlossary(glossary);
+  showGlossary(settings.glossary);
   modeSelect.value = settings.translationMode;
   maxTokensInput.value = String(settings.maxOutputTokens);
   showCacheSettings(settings);
-  // 불러오는 사이에 사용자가 입력을 시작했으면 덮어쓰지 않는다.
-  if (!keyInput.value) keyInput.value = apiKeys.anthropic ?? "";
-  if (isListedModel(model)) {
-    modelSelect.value = model;
-  } else {
-    modelSelect.value = CUSTOM_MODEL;
-    customModelInput.value = model;
-    customModelInput.hidden = false;
+  // 불러오는 사이에 사용자가 키를 입력하기 시작했으면 덮어쓰지 않는다.
+  const typed = keyInput.value;
+  for (const provider of PROVIDERS) {
+    drafts.set(provider.id, { key: settings.apiKeys[provider.id] ?? "", model: settings.models[provider.id] });
   }
+  if (typed) drafts.get(settings.provider)!.key = typed;
+  providerSelect.value = settings.provider;
+  showProvider(settings.provider);
+}
+
+/** 고른 제공업체의 키 라벨·자리표시자·모델 목록을 보여 주고, 그 제공업체에 입력해 둔 값을 채운다. */
+function showProvider(provider: ProviderId): void {
+  shownProvider = provider;
+  const info = providerInfo(provider);
+  keyLabel.textContent = `${info.name} API 키`;
+  keyInput.placeholder = info.keyPlaceholder;
+  customModelInput.placeholder = `모델 ID (예: ${info.customModelExample})`;
+
+  // 모델 목록은 src/shared/models.ts 한 곳에서 가져온다 (SPEC 7.2).
+  modelSelect.replaceChildren();
+  for (const model of MODELS[provider]) {
+    const suffix = model.id === DEFAULT_MODELS[provider] ? " (기본)" : "";
+    modelSelect.add(new Option(`${model.name} — ${model.description}${suffix}`, model.id));
+  }
+  modelSelect.add(new Option("직접 입력", CUSTOM_MODEL));
+
+  const draft = drafts.get(provider) ?? { key: "", model: DEFAULT_MODELS[provider] };
+  keyInput.value = draft.key;
+  const listed = isListedModel(draft.model, provider);
+  modelSelect.value = listed ? draft.model : CUSTOM_MODEL;
+  customModelInput.value = listed ? "" : draft.model;
+  customModelInput.hidden = listed;
+  void showModelSuggestions(provider);
+}
+
+function rememberDraft(): void {
+  drafts.set(shownProvider, {
+    key: keyInput.value.trim(),
+    model: modelSelect.value === CUSTOM_MODEL ? customModelInput.value.trim() : modelSelect.value,
+  });
+}
+
+/** "직접 입력"의 자동 완성: OpenRouter는 실제 모델 목록 (SPEC 13장 "OpenRouter 모델 고르기") */
+let openRouterModelIds: Promise<string[]> | undefined;
+async function showModelSuggestions(provider: ProviderId): Promise<void> {
+  if (provider !== "openrouter") return customModelList.replaceChildren();
+  openRouterModelIds ??= sendMessage({ type: "get-openrouter-models" });
+  const ids = await openRouterModelIds;
+  if (shownProvider === provider) customModelList.replaceChildren(...ids.map((id) => new Option(id, id)));
 }
 
 function selectedModel(): string {

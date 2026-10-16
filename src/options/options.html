@@ -11,7 +11,11 @@
     <main>
       <h1>AITranslator 설정</h1>
       <section>
-        <label for="api-key">Anthropic API 키</label>
+        <label for="provider">제공업체</label>
+        <div class="row">
+          <select id="provider"></select>
+        </div>
+        <label for="api-key" id="api-key-label">Anthropic API 키</label>
         <div class="row">
           <input id="api-key" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
           <button id="toggle-key" type="button">보기</button>
@@ -26,8 +30,10 @@
             aria-label="모델 ID"
             autocomplete="off"
             spellcheck="false"
+            list="custom-model-list"
             hidden
           />
+          <datalist id="custom-model-list"></datalist>
         </div>
         <label for="mode">번역 방식</label>
         <div class="row">

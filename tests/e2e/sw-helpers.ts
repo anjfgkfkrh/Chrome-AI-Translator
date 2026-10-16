@@ -1,5 +1,6 @@
 import type { BrowserContext, Page, Worker } from "@playwright/test";
 import type { UsageStats } from "../../src/shared/usage";
+import { SAMPLE_MODELS } from "../helpers/openrouter-sample";
 
 // 서비스 워커 안에서 실행하는 E2E 도우미. evaluate()에 넘기는 함수는 바깥 변수를 쓰지 않는다.
 
@@ -180,4 +181,56 @@ export async function openPopup(
 /** 설치 때 열린 옵션 페이지를 닫는다. openOptionsPage()가 새 탭을 여는지 확인하려면 먼저 닫아야 한다. */
 export async function closeOptionsPages(context: BrowserContext): Promise<void> {
   for (const page of context.pages()) if (page.url().endsWith("/options/options.html")) await page.close();
+}
+
+export interface MockOpenRouterOptions {
+  /** 키 확인 주소의 상태 코드 (기본 200) */
+  keyStatus?: number;
+  /** 번역 응답의 usage */
+  usage?: Record<string, unknown>;
+}
+
+/**
+ * OpenRouter API를 흉내 낸다: 모델 목록, 키 확인, 번역(세그먼트를 대문자로). 보낸 요청은 __apiCalls에 남긴다.
+ * 모델 목록은 tests/helpers/openrouter-sample.ts의 예시다.
+ */
+export async function mockOpenRouterApi(serviceWorker: Worker, options: MockOpenRouterOptions = {}): Promise<void> {
+  await serviceWorker.evaluate(
+    ({ keyStatus, usage, models }) => {
+      const scope = globalThis as unknown as { __apiCalls?: ApiCall[] };
+      const calls = scope.__apiCalls ?? [];
+      const json = (status: number, body: unknown) =>
+        new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      Object.assign(globalThis, {
+        __apiCalls: calls,
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          calls.push({ url, headers: init?.headers, body: String(init?.body) });
+          if (url === "https://openrouter.ai/api/v1/models") return json(200, models);
+          if (url === "https://openrouter.ai/api/v1/key") {
+            return keyStatus === 200
+              ? json(200, { data: { label: "e2e" } })
+              : json(keyStatus, { error: { code: keyStatus, message: "User not found." } });
+          }
+          if (url === "https://openrouter.ai/api/v1/chat/completions") {
+            const request = JSON.parse(String(init?.body));
+            const { groups } = JSON.parse(request.messages[1].content) as { groups: { id: string; segments: string[] }[] };
+            const translated = groups.map((group) => ({
+              id: group.id,
+              segments: group.segments.map((segment) => segment.toUpperCase()),
+            }));
+            return json(200, {
+              id: "gen-e2e",
+              choices: [
+                { message: { role: "assistant", content: JSON.stringify({ groups: translated }) }, finish_reason: "stop" },
+              ],
+              usage: usage ?? { prompt_tokens: 1, completion_tokens: 1 },
+            });
+          }
+          return json(404, { error: { code: 404, message: `unexpected ${url}` } });
+        },
+      });
+    },
+    { keyStatus: options.keyStatus ?? 200, usage: options.usage, models: SAMPLE_MODELS },
+  );
 }

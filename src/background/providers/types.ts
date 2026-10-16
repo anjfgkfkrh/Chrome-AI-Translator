@@ -4,8 +4,10 @@ import type { TokenUsage } from "../../shared/usage";
 // 번역 제공업체 인터페이스 (SPEC 5.2). MVP는 AnthropicProvider만 구현한다.
 
 export interface TranslationProvider {
-  id: "anthropic" | "openai" | "gemini" | "openai-compatible";
+  id: "anthropic" | "openrouter" | "openai" | "gemini" | "openai-compatible";
   translate(req: TranslateRequest, opts: TranslateOptions): Promise<TranslateResponse>;
+  /** "빠르게"에서 이 모델의 사고를 실제로 끌 수 있는지. 끌 수 없으면 정확하게로 번역한다 (SPEC 13장). */
+  canDisableThinking(model: string): Promise<boolean>;
   testConnection(opts: RequestOptions): Promise<{ ok: boolean; message?: string }>;
 }
 
@@ -40,7 +42,8 @@ export interface TranslateResponse {
 
 /** 제공업체와 무관한 오류 분류. 안내 문구와 재시도 정책(SPEC 5.4)이 이 값으로 갈린다. */
 export type ProviderErrorKind =
-  | "auth" // 401, 403
+  | "auth" // 401 (Anthropic은 403도)
+  | "credits" // OpenRouter 402: 크레딧 부족
   | "not_found" // 404: 모델이 없거나 쓸 수 없음
   | "rate_limit" // 429
   | "server" // 500, 529 등 5xx

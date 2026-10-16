@@ -221,7 +221,7 @@ raw = "  Get started  " → lead="  ", core="Get started", tail="  "
 ### 5.2 제공업체 인터페이스 (고도화 대비)
 ```ts
 export interface TranslationProvider {
-  id: "anthropic" | "openai" | "gemini" | "openai-compatible";
+  id: "anthropic" | "openrouter" | "openai" | "gemini" | "openai-compatible"; // openrouter는 13장 결정으로 추가
   translate(req: TranslateRequest, opts: { apiKey: string; model: string; signal?: AbortSignal }): Promise<TranslateResponse>;
   testConnection(opts: { apiKey: string; model: string }): Promise<{ ok: boolean; message?: string }>;
 }
@@ -251,6 +251,13 @@ export interface TranslateResponse {
 - 시스템 프롬프트와 용어집은 매 요청마다 같으므로 프롬프트 캐싱(`cache_control`) 적용을 검토합니다.
 - 구현 시점에 https://docs.claude.com 에서 헤더, 모델 ID, 프롬프트 캐싱 사용법을 다시 확인합니다.
 
+### 5.3.1 OpenRouter API 호출 (13장 결정으로 추가, 2026-10-16 공식 문서와 실제 요청으로 확인)
+- 엔드포인트: `POST https://openrouter.ai/api/v1/chat/completions` (OpenAI 형식)
+- 헤더: `Authorization: Bearer <사용자 키>`, `Content-Type: application/json`. 앱 표시 헤더(`HTTP-Referer`, `X-OpenRouter-Title`)는 보내지 않습니다.
+- 권한: OpenRouter가 모든 출처를 허용(CORS `*`)해서 `host_permissions`를 늘리지 않습니다.
+- 모델 정보: `GET https://openrouter.ai/api/v1/models`(키 없음)를 하루에 한 번 받아, 모델마다 사고를 끌 수 있는지, 구조화된 출력 지원, 최대 출력을 판단합니다.
+- 연결 테스트: `GET https://openrouter.ai/api/v1/key`로 키를, 모델 목록으로 모델 ID를 확인합니다 (토큰을 쓰지 않음).
+
 ### 5.4 오류 처리
 | 상황 | 처리 |
 |---|---|
@@ -268,12 +275,13 @@ export interface TranslateResponse {
 ```ts
 // chrome.storage.local (sync 사용 금지: API 키가 다른 기기로 동기화되지 않게)
 interface Settings {
-  provider: "anthropic";
-  apiKeys: { anthropic?: string };
+  provider: "anthropic" | "openrouter";   // 기본 anthropic (13장 OpenRouter 결정)
+  apiKeys: { anthropic?: string; openrouter?: string };
   targetLanguage: "ko";
   glossary: { keep: string[]; map: Record<string, string>; version: number };
   autoTranslateOrigins: string[];   // 예: ["https://docs.langchain.com"]
-  model: string;                    // 기본: 비용 우선 모델 ID (src/shared/models.ts)
+  model: string;                    // 고른 제공업체의 모델 (models[provider])
+  models: { anthropic: string; openrouter: string }; // 제공업체마다 따로 기억. 기본: 비용 우선 모델 (src/shared/models.ts)
   maxCachedPages: number;           // 기본 10 (M5 결정으로 쓰지 않음)
   translationMode: "accurate" | "fast"; // 기본 accurate. 빠르게면 사고를 끔 (13장 M7 후속 결정)
   maxOutputTokens: number;          // 기본 32000. 1,000~128,000 (13장 M7 후속 결정)
@@ -324,7 +332,7 @@ interface UsageStats {
   "name": "AITranslator",
   "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
-  "host_permissions": ["https://api.anthropic.com/*"],
+  "host_permissions": ["https://api.anthropic.com/*"],   // OpenRouter는 CORS를 허용해 추가하지 않음 (5.3.1)
   "commands": { "toggle-translation": { "suggested_key": { "default": "Alt+T", "mac": "Alt+T" }, "description": "번역 / 원문 보기 전환" } }
 }
 ```
@@ -333,7 +341,7 @@ interface UsageStats {
 
 ## 8. 고도화 로드맵 (MVP 이후)
 
-1. **다중 제공업체**: OpenAI, Gemini, OpenAI 호환(base URL 입력) 추가. 옵션에서 제공업체와 모델 선택, 제공업체별 키 저장.
+1. **다중 제공업체**: OpenAI, Gemini, OpenAI 호환(base URL 입력) 추가. 옵션에서 제공업체와 모델 선택, 제공업체별 키 저장. (2026-10-16 OpenRouter를 먼저 추가함. 13장)
 2. **대상 언어 선택**: 한국어 외 언어.
 3. **병기 모드**: 원문 아래 번역 표시 (이 모드만 예외적으로 DOM 추가 허용, 별도 토글).
 4. **속성 번역**: `placeholder`, `title`, `alt`, `aria-label` (옵션).
@@ -456,7 +464,7 @@ interface UsageStats {
 - 각 마일스톤을 시작하기 전에 이 문서의 해당 절을 다시 읽고, 끝나면 완료 기준을 테스트로 확인합니다.
 - **1.2절 핵심 원칙을 어기는 구현(예: `innerHTML` 교체, 요소 래핑, 속성 변경)은 하지 않습니다.** 필요해 보이면 12.1절에 따라 일시 정지하고 보고합니다.
 - 외부 API 사양(헤더, 모델 ID)은 기억에 의존하지 말고 https://docs.claude.com 에서 확인합니다.
-- 실제 API 키가 필요한 테스트는 환경 변수(`ANTHROPIC_API_KEY`)로만 받고, 저장소에 키를 커밋하지 않습니다.
+- 실제 API 키가 필요한 테스트는 환경 변수(`ANTHROPIC_API_KEY`, OpenRouter는 `OPENROUTER_API_KEY`)로만 받고, 저장소에 키를 커밋하지 않습니다.
 - 목 번역기를 만들어 대부분의 테스트를 API 호출 없이 돌릴 수 있게 합니다.
 
 ---
@@ -544,6 +552,12 @@ interface UsageStats {
 | 번역 방식과 캐시 | 사고를 끄고 번역한 번역문은 캐시에 "빠르게"로 표시. 정확하게로 번역할 때 캐시에 있는 것이 빠르게 번역한 것이면 쓰지 않고 다시 번역해 바꿔 넣음. 빠르게로 번역할 때는 있는 캐시를 그대로 씀. Opus·직접 입력한 모델은 사고를 끄지 않으므로 정확하게로 봄 (사용자 결정) | 4.7 |
 | 문맥의 텍스트를 따로 넣은 응답 | 실제 페이지(LangSmith 튜토리얼)에서 모델이 문맥에만 있던 코드(`llm`)를 세그먼트 한 칸으로 넣어 개수가 틀렸음. 돌려받은 칸이 더 많고, 남는 칸이 보내지 않은 텍스트(문맥에서 보낸 세그먼트를 차례로 지우고 남은 부분)와 정확히 같으며 그 수가 남는 수와 같으면 그 칸을 빼고 받아들임. 아니면 지금처럼 다시 요청. 프롬프트에 코드가 낀 문장 예시를 더함 (사용자 결정) | 4.3 |
 | 빠르게의 형식 오류 재요청 | 실제 측정에서 빠르게(사고 끔)는 149개 그룹 중 10~14개가 칸 수를 어기고(합침·빈 칸·더 나눔·문맥 복사), 재요청 뒤에도 2~4개가 원문으로 남았음. 빠르게일 때 형식이 틀린 그룹의 재요청(1회)은 사고를 켜고 보냄. 재요청은 지금처럼 틀린 그룹만 보냄. 사고를 켜고 번역한 그룹은 캐시에 정확하게로 저장. Opus·직접 입력한 모델은 해당 없음 (사용자 결정) | 4.3 |
+| OpenRouter 추가 | 두 번째 제공업체로 OpenRouter를 추가 (5.3.1). 옵션 페이지 맨 위에서 제공업체를 고르고, 키 입력·모델 목록·연결 테스트가 고른 제공업체를 따름. 다른 OpenAI 호환 주소(base URL 입력)는 이번에 넣지 않음 (사용자 결정) | 4.10, 5.2, 8 |
+| OpenRouter 모델 고르기 | 추천 목록(Claude Haiku 5.5 `anthropic/claude-haiku-5.5` 기본, Sonnet 5.5, Opus 5.5) + "직접 입력". 직접 입력칸은 실제 모델 목록을 자동 완성으로 제안하고 `:batch` 모델은 뺌 (사용자 결정) | 4.10, 7.2 |
+| OpenRouter 번역 방식 | 모델 정보로 판단. 정확하게는 `reasoning: {effort: "medium"}`(모델이 medium을 지원할 때), 빠르게는 사고를 끌 수 있는 모델에서만 `reasoning: {effort: "none"}`. 사고가 필수인 모델(Sonnet 5.5, Opus 5.5, 대부분의 Gemini)은 그대로 두고 캐시에는 정확하게로 저장. 모델 정보를 못 받으면 `reasoning`을 보내지 않음 (사용자 결정) | 4.3, 5.3.1 |
+| OpenRouter 연결 테스트 | 토큰을 쓰지 않음: 키는 `GET /api/v1/key`, 모델 ID는 모델 목록에 있는지 확인 (사용자 결정) | 4.10, 5.3.1 |
+| OpenRouter 세부 | 새 권한 없음(CORS 확인). 모델은 제공업체마다 따로 기억. Claude 모델(`anthropic/…`)은 시스템 프롬프트에 `cache_control`, 다른 모델은 자동 캐시. 구조화된 출력은 모델이 지원할 때만. 최대 출력 토큰이 모델 한도보다 크면 모델 한도로 줄임. 사용량은 제공업체를 합쳐 한 줄(입력 = 전체 입력 − 캐시 읽기 − 캐시 쓰기). 앱 표시 헤더는 보내지 않음. `:batch` 모델은 자동 완성에서 뺌. 실제 API 테스트는 `OPENROUTER_API_KEY`가 있을 때만 (사용자 결정) | 5.3.1, 6, 7.3, 12.2 |
+| OpenRouter 오류 | 401은 키 오류. 402는 "OpenRouter 크레딧이 부족합니다. 크레딧을 충전하세요."로 번역 전체를 멈춤. 403은 "번역 실패: {메시지}"(키 오류로 보지 않음). 408은 시간 초과, 429는 `Retry-After`, 500·502·503·504는 서버 오류로 재시도. 200 응답 안의 `error`도 같은 기준. `finish_reason`의 `length`는 잘린 응답, `content_filter`는 거절 (사용자 결정) | 5.4 |
 | 잘린 응답(`max_tokens`) | 같은 배치를 다시 보내지 않고 그룹을 반으로 나눠 각각 보냄. 그룹 하나만 남았는데도 잘리면 그 그룹은 원문으로 둠 ("응답 검증"의 잘린 응답 규칙을 바꿈, 사용자 결정) | 4.3 |
 | 팝업의 캐시 사용량 | "설정" 줄 위에 한 줄. 옵션 페이지 "저장된 번역"과 같은 값(캐시 항목만). 키가 없거나 번역할 수 없는 페이지에서도 항상 보이고, 열려 있는 동안 상태와 함께 0.5초마다 갱신 (사용자 결정) | 4.9 |
 | 자동 번역 실행 시점 | 페이지 로드가 끝난 뒤 (`document_idle`) | 4.8 |
@@ -600,6 +614,10 @@ interface UsageStats {
 | 옵션 페이지: 두 목록에 같은 단어 | '{단어}'이(가) 두 목록에 모두 있습니다. (받침 때문에 "가"에서 바꿈, 사용자 결정) |
 | 옵션 페이지: 같은 원어에 번역어가 둘 | '{원어}'의 번역어가 두 개 있습니다. |
 | 옵션 페이지: 사용량 제목 / 내용 / 비었을 때 | 사용량 / 이번 달: 입력 {N} · 캐시 쓰기 {N} · 캐시 읽기 {N} · 출력 {N} 토큰 (쉼표 구분) / 이번 달 사용량이 없습니다. |
+| 옵션 페이지: 제공업체 | 라벨 "제공업체", 항목 "Anthropic" / "OpenRouter" |
+| 옵션 페이지: OpenRouter 키 | 라벨 "OpenRouter API 키", 자리표시자 "sk-or-..." |
+| 옵션 페이지: OpenRouter 모델 | 이름은 Anthropic 목록과 같음. 직접 입력 자리표시자 "모델 ID (예: google/gemini-3.5-flash)" |
+| 오류: OpenRouter 크레딧 부족 (402) | OpenRouter 크레딧이 부족합니다. 크레딧을 충전하세요. |
 | 옵션 페이지: 번역 방식 | 라벨 "번역 방식" (M7 구현 중 정함, 사용자 확인). 정확하게 (사고 켬, 기본) / 빠르게 (사고 끔) |
 | 옵션 페이지: 최대 출력 토큰 | 라벨 "최대 출력 토큰", 안내 "응답 한 번에 쓸 수 있는 최대 토큰 수 (사고 포함). 크면 긴 페이지도 한 번에 번역하지만 시간이 오래 걸립니다." |
 | 옵션 페이지: 캐시 상한 | 캐시 상한 [8] MB (바꾼 뒤 문구는 정리 기준과 같음) |

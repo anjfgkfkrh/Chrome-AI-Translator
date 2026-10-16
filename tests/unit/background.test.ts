@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monthOf } from "../../src/shared/usage";
 import { echoUppercase, messageResponse, requestBody } from "../helpers/anthropic-mock";
+import { CHAT_URL, chatRequestedGroups, chatTranslation, jsonResponse, KEY_URL, stubOpenRouter } from "../helpers/openrouter-mock";
 import { createPort, EXTENSION_ID, installChromeMock } from "./chrome-mock";
 
 let chromeMock: ReturnType<typeof installChromeMock>;
@@ -603,5 +604,86 @@ describe("캐시 바로 정리 (SPEC 13장 \"상한을 지금 사용량보다 �
 
     expect(chromeMock.storage).not.toHaveProperty("t:old");
     expect(chromeMock.storage).toHaveProperty("t:new");
+  });
+});
+
+describe("OpenRouter (SPEC 13장 \"OpenRouter 추가\")", () => {
+  it("OpenRouter를 고르면 OpenRouter 키로 OpenRouter에 번역을 요청한다. 키는 메시지에 넣지 않는다", async () => {
+    chromeMock.storage.settings = { provider: "openrouter", apiKeys: { anthropic: "sk-ant-saved", openrouter: "sk-or-saved" } };
+    const fetchMock = stubOpenRouter({
+      chat: (init) => chatTranslation(chatRequestedGroups(init).map((g) => ({ id: g.id, segments: g.segments.map((s) => s.toUpperCase()) }))),
+    });
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+
+    receive({ type: "translate", groups: [{ id: "g1", segments: ["Get started"] }], newTurn: true });
+
+    await vi.waitFor(() =>
+      expect(posted).toEqual([
+        { type: "results", groups: [{ id: "g1", segments: ["GET STARTED"] }] },
+        { type: "done", failed: 0, error: undefined },
+      ]),
+    );
+    const chat = fetchMock.mock.calls.find(([url]) => String(url) === CHAT_URL)!;
+    expect(chat[1]?.headers).toMatchObject({ Authorization: "Bearer sk-or-saved" });
+    expect(JSON.parse(String(chat[1]?.body)).model).toBe("anthropic/claude-haiku-5.5");
+    expect(JSON.stringify(posted)).not.toContain("sk-or-saved");
+  });
+
+  it("고른 제공업체의 키가 없으면 다른 제공업체의 키가 있어도 키 없음으로 알린다", async () => {
+    chromeMock.storage.settings = { provider: "openrouter", apiKeys: { anthropic: "sk-ant-saved" } };
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+
+    receive({ type: "translate", groups: [{ id: "g1", segments: ["Hello"] }], newTurn: true });
+
+    await vi.waitFor(() =>
+      expect(posted).toEqual([
+        { type: "error", message: "API 키를 먼저 설정하세요", needsSettings: true, missingKey: true },
+      ]),
+    );
+  });
+
+  it("OpenRouter의 서버 오류 문구에는 OpenRouter를 쓴다", async () => {
+    chromeMock.storage.settings = { provider: "openrouter", apiKeys: { openrouter: "sk-or-saved" } };
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      stubOpenRouter({ chat: () => jsonResponse(503, { error: { code: 503, message: "busy" } }) });
+      const { port, posted, receive } = createPort(contentScript);
+      chromeMock.onConnect[0]!(port);
+
+      receive({ type: "translate", groups: [{ id: "g1", segments: ["Hello"] }], newTurn: true });
+      for (let i = 0; i < 20 && !posted.some((m) => m.type === "done"); i++) await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(posted.at(-1)).toEqual({
+        type: "done",
+        failed: 1,
+        error: "OpenRouter 서버가 혼잡합니다. 잠시 후 다시 시도하세요.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("연결 테스트는 화면에서 고른 (저장 전) 제공업체로 한다", async () => {
+    const fetchMock = stubOpenRouter({ key: () => jsonResponse(200, { data: {} }) });
+
+    expect(
+      await ask({ type: "test-connection", provider: "openrouter", apiKey: "sk-or-typed", model: "anthropic/claude-haiku-5.5" }, optionsPage),
+    ).toEqual({ ok: true, message: "연결 성공 (anthropic/claude-haiku-5.5)" });
+    const key = fetchMock.mock.calls.find(([url]) => String(url) === KEY_URL)!;
+    expect(key[1]?.headers).toEqual({ Authorization: "Bearer sk-or-typed" });
+  });
+
+  it("옵션 페이지의 자동 완성에 OpenRouter 모델 ID를 준다 (일괄 처리용은 뺌)", async () => {
+    stubOpenRouter({});
+
+    expect(await ask({ type: "get-openrouter-models" }, optionsPage)).toEqual([
+      "anthropic/claude-haiku-5.5",
+      "anthropic/claude-sonnet-5.5",
+      "deepseek/deepseek-chat",
+      "plain/model",
+    ]);
   });
 });

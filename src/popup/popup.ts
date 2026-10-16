@@ -1,7 +1,7 @@
 import { sendMessage, type TabAction, type TabState } from "../shared/messages";
 import { renderShortcut } from "../shared/shortcut";
 import { originPattern, pageOrigin } from "../shared/sites";
-import { getSettings } from "../shared/storage";
+import { activeApiKey, getSettings } from "../shared/storage";
 
 // 팝업 (SPEC 4.9, 13장 "M4 화면 문구"). 상태는 대상 탭의 콘텐츠 스크립트가 들고 있고, 백그라운드를 거쳐 읽는다.
 
@@ -91,10 +91,12 @@ function showDenied(): void {
 }
 
 async function refresh(): Promise<void> {
-  const { apiKeys, cacheMaxMB } = await getSettings();
-  await renderCacheUsage(cacheMaxMB);
-  autoRow.hidden = !apiKeys.anthropic || origin === undefined;
-  if (!apiKeys.anthropic) return renderNoKey();
+  const settings = await getSettings();
+  await renderCacheUsage(settings.cacheMaxMB);
+  // 고른 제공업체의 키가 있는지로 본다 (SPEC 13장 "OpenRouter 추가").
+  const hasKey = activeApiKey(settings) !== undefined;
+  autoRow.hidden = !hasKey || origin === undefined;
+  if (!hasKey) return renderNoKey();
   if (tabId === undefined) return render({ status: "unsupported" });
   render(await sendMessage({ type: "get-tab-state", tabId }));
 }

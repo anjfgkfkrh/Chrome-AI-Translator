@@ -1,5 +1,4 @@
 import type { RequestGroup, SegmentGroup } from "../shared/messages";
-import { thinkingDisabled } from "../shared/models";
 import type { Settings } from "../shared/storage";
 import type { TokenUsage } from "../shared/usage";
 import { cacheKey, cacheLimits, lookupCache, storeCache } from "./cache";
@@ -47,7 +46,9 @@ export interface TranslationSummary {
  * 그 밖의 실패(재시도까지 실패, 형식 오류, refusal)는 해당 그룹만 원문으로 두고 계속한다.
  */
 export async function translateGroups(job: TranslationJob): Promise<TranslationSummary> {
-  const { misses, keyById } = await useCache(job);
+  // 빠르게여도 사고를 끌 수 없는 모델이면 정확하게로 번역하고 저장한다 (SPEC 13장 "번역 방식과 캐시").
+  const fast = job.settings.translationMode === "fast" && (await job.provider.canDisableThinking(job.settings.model));
+  const { misses, keyById } = await useCache(job, fast);
   const stopAll = new AbortController();
   const signal = AbortSignal.any([job.signal, stopAll.signal]);
   limiter.max = job.settings.maxConcurrentRequests;
@@ -61,7 +62,7 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
   await Promise.all(
     pack(assembler.pieces, job.settings.batchMaxNodes).map(async (batch) => {
       try {
-        const outcome = await limiter.run(() => translateBatch(job, batch, signal), signal);
+        const outcome = await limiter.run(() => translateBatch(job, batch, signal, fast), signal);
         for (const id of outcome.fastIds) fastIds.add(id);
         const done = assembler.complete(outcome.valid, outcome.failed);
         if (done.length > 0) {
@@ -85,10 +86,12 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
 }
 
 /** 캐시에 있는 그룹은 바로 넘기고, 없는 그룹과 그 캐시 키를 돌려준다. 저장소를 못 읽으면 캐시 없이 진행한다. */
-async function useCache(job: TranslationJob): Promise<{ misses: RequestGroup[]; keyById: Map<string, string> }> {
+async function useCache(
+  job: TranslationJob,
+  fast: boolean,
+): Promise<{ misses: RequestGroup[]; keyById: Map<string, string> }> {
   const keys = await Promise.all(job.groups.map((group) => cacheKey(job.settings, group)));
-  const accurate = !thinkingDisabled(job.settings);
-  const cached = await lookupCache(keys, job.turn, { accurate }).catch((err: unknown) => {
+  const cached = await lookupCache(keys, job.turn, { accurate: !fast }).catch((err: unknown) => {
     console.warn("[AITranslator] 캐시를 읽지 못했습니다.", err);
     return new Map<string, string[]>();
   });
@@ -141,14 +144,19 @@ interface BatchOutcome {
  * 배치 하나: 형식 오류(파싱 실패, ID 누락, 개수 불일치, 빈 세그먼트)는 해당 그룹만 1회 재요청한다 (SPEC 4.3, 13장).
  * max_tokens에서 잘리면 같은 배치를 다시 보내지 않고 반으로 나눠 차례로 보낸다. 그룹 하나만 남았는데도 잘리면 원문으로 둔다.
  */
-async function translateBatch(job: TranslationJob, groups: RequestGroup[], signal: AbortSignal): Promise<BatchOutcome> {
+async function translateBatch(
+  job: TranslationJob,
+  groups: RequestGroup[],
+  signal: AbortSignal,
+  fastMode: boolean,
+): Promise<BatchOutcome> {
   const valid: SegmentGroup[] = [];
   const fastIds = new Set<string>();
   let pending = groups;
   let error: unknown;
   for (let round = 0; round < 2 && pending.length > 0; round++) {
     // 빠르게여도 재요청은 사고를 켜고 보낸다. 사고를 끄면 칸 수를 자주 어기기 때문이다 (SPEC 13장).
-    const fast = round === 0 && thinkingDisabled(job.settings);
+    const fast = round === 0 && fastMode;
     try {
       const response = await requestWithRetry(job, pending, signal, fast);
       const checked = validateGroups(pending, response.groups);
@@ -162,8 +170,8 @@ async function translateBatch(job: TranslationJob, groups: RequestGroup[], signa
       if (err.kind === "truncated" && pending.length > 1) {
         // 동시 요청 자리 하나 안에서 차례로 보낸다 (SPEC 13장 "잘린 응답").
         const [first, second] = halves(pending);
-        const a = await translateBatch(job, first, signal);
-        const b = await translateBatch(job, second, signal);
+        const a = await translateBatch(job, first, signal, fastMode);
+        const b = await translateBatch(job, second, signal, fastMode);
         return {
           valid: [...valid, ...a.valid, ...b.valid],
           failed: [...a.failed, ...b.failed],
@@ -222,7 +230,7 @@ async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], sig
 
 /** 이 오류는 다른 배치도 같은 이유로 실패하므로 번역 전체를 멈춘다 (키 오류, 없는 모델, 잔액 부족 같은 요청 오류). */
 function isFatal(err: ProviderError): boolean {
-  return err.kind === "auth" || err.kind === "not_found" || err.kind === "other";
+  return err.kind === "auth" || err.kind === "credits" || err.kind === "not_found" || err.kind === "other";
 }
 
 /** 1초 → 2초 → 4초, ±20% */

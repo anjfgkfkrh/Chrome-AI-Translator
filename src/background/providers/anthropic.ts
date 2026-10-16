@@ -2,6 +2,7 @@ import { isListedModel, listedModel } from "../../shared/models";
 import type { TokenUsage } from "../../shared/usage";
 import { errorMessage } from "../errors";
 import { parseResponse, RESPONSE_SCHEMA, systemPrompt, userMessage } from "../prompt";
+import { requestJson } from "./http";
 import {
   ProviderError,
   type ProviderErrorKind,
@@ -30,6 +31,11 @@ interface MessageResponse {
 
 export class AnthropicProvider implements TranslationProvider {
   readonly id = "anthropic";
+
+  /** 목록의 모델 가운데 끄는 값이 있는 모델만 (Opus와 직접 입력한 모델은 끌 수 없음) */
+  async canDisableThinking(model: string): Promise<boolean> {
+    return listedModel(model)?.thinkingOff !== undefined;
+  }
 
   async translate(
     req: TranslateRequest,
@@ -79,10 +85,10 @@ export class AnthropicProvider implements TranslationProvider {
   }
 }
 
-async function postMessages(apiKey: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
-  let res: Response;
-  try {
-    res = await fetch(API_URL, {
+function postMessages(apiKey: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+  return requestJson(
+    API_URL,
+    {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
@@ -93,19 +99,9 @@ async function postMessages(apiKey: string, body: unknown, signal?: AbortSignal)
       },
       body: JSON.stringify(body),
       signal,
-    });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "TimeoutError") {
-      throw new ProviderError("timeout", "요청 시간이 초과되었습니다.");
-    }
-    if (err instanceof DOMException && err.name === "AbortError") throw err; // 호출한 쪽에서 취소함
-    throw new ProviderError("network", err instanceof Error ? err.message : String(err));
-  }
-  if (!res.ok) {
-    const message = (await readErrorMessage(res)) ?? `HTTP ${res.status}`;
-    throw new ProviderError(classify(res.status), message, { status: res.status, retryAfterMs: retryAfter(res) });
-  }
-  return res.json();
+    },
+    classify,
+  );
 }
 
 function classify(status: number): ProviderErrorKind {
@@ -114,26 +110,6 @@ function classify(status: number): ProviderErrorKind {
   if (status === 429) return "rate_limit";
   if (status >= 500) return "server";
   return "other";
-}
-
-/** retry-after 헤더(초 또는 HTTP 날짜)를 밀리초로 바꾼다. */
-function retryAfter(res: Response): number | undefined {
-  const value = res.headers.get("retry-after");
-  if (value === null) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
-}
-
-/** 오류 본문 형식: {"type":"error","error":{"type":"...","message":"..."}} */
-async function readErrorMessage(res: Response): Promise<string | undefined> {
-  try {
-    const body = (await res.json()) as { error?: { message?: unknown } };
-    return typeof body.error?.message === "string" ? body.error.message : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** 입력은 캐시를 쓰지 않은 부분, 캐시에 쓴 부분, 캐시에서 읽은 부분으로 따로 온다 (SPEC 13장 "사용량 표시"). */

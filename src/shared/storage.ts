@@ -1,15 +1,20 @@
 import { sameTerms, type GlossaryTerms } from "./glossary";
-import { DEFAULT_MODEL_ID } from "./models";
+import { DEFAULT_MODELS, DEFAULT_PROVIDER, type ProviderId } from "./models";
 
 // chrome.storage.local만 쓴다. sync는 API 키가 다른 기기로 동기화되므로 쓰지 않는다 (SPEC 6).
 
 export interface Settings {
-  provider: "anthropic";
-  apiKeys: { anthropic?: string };
+  /** 번역에 쓰는 제공업체 (SPEC 13장 "OpenRouter 추가") */
+  provider: ProviderId;
+  /** 제공업체마다 따로 저장한 키 */
+  apiKeys: Partial<Record<ProviderId, string>>;
   targetLanguage: "ko";
   glossary: { keep: string[]; map: Record<string, string>; version: number };
   autoTranslateOrigins: string[]; // 예: ["https://docs.langchain.com"]
+  /** 고른 제공업체의 모델 (models[provider]) */
   model: string;
+  /** 제공업체마다 따로 기억한 모델 */
+  models: Record<ProviderId, string>;
   /** 정확하게(사고 켬) / 빠르게(사고 끔) (SPEC 13장 "번역 방식") */
   translationMode: "accurate" | "fast";
   /** 번역 요청의 max_tokens (사고 포함) (SPEC 13장 "최대 출력 토큰") */
@@ -32,7 +37,7 @@ export const CACHE_IDLE_TURNS_RANGE = { min: 1, max: 1000 } as const;
 
 export function defaultSettings(): Settings {
   return {
-    provider: "anthropic",
+    provider: DEFAULT_PROVIDER,
     apiKeys: {},
     targetLanguage: "ko",
     glossary: {
@@ -41,7 +46,8 @@ export function defaultSettings(): Settings {
       version: 1,
     },
     autoTranslateOrigins: [],
-    model: DEFAULT_MODEL_ID,
+    model: DEFAULT_MODELS[DEFAULT_PROVIDER],
+    models: { ...DEFAULT_MODELS },
     translationMode: "accurate",
     maxOutputTokens: 32_000,
     cacheMaxMB: 8,
@@ -54,8 +60,11 @@ export function defaultSettings(): Settings {
 
 const SETTINGS_KEY = "settings";
 
-/** 저장소에는 사용자가 바꾼 값만 둔다. 기본값은 읽을 때 채우므로 나중에 기본값을 바꿔도 그대로 반영된다. */
-type StoredSettings = Partial<Settings>;
+/**
+ * 저장소에는 사용자가 바꾼 값만 둔다. 기본값은 읽을 때 채우므로 나중에 기본값을 바꿔도 그대로 반영된다.
+ * model은 제공업체가 하나였을 때 저장한 Anthropic 모델이다. 읽을 때 models.anthropic으로 본다.
+ */
+type StoredSettings = Omit<Partial<Settings>, "models"> & { models?: Partial<Record<ProviderId, string>> };
 
 async function readStored(): Promise<StoredSettings> {
   const items = await chrome.storage.local.get<{ settings?: StoredSettings }>(SETTINGS_KEY);
@@ -65,29 +74,55 @@ async function readStored(): Promise<StoredSettings> {
 export async function getSettings(): Promise<Settings> {
   const defaults = defaultSettings();
   const stored = await readStored();
+  const provider = stored.provider ?? defaults.provider;
+  const models = { ...defaults.models, ...storedModels(stored) };
   return {
     ...defaults,
     ...stored,
+    provider,
     apiKeys: { ...defaults.apiKeys, ...stored.apiKeys },
     glossary: { ...defaults.glossary, ...stored.glossary },
+    models,
+    model: models[provider],
   };
 }
 
-/** Anthropic API 키를 저장한다. 빈 문자열이면 저장된 키를 지운다. */
-export async function setApiKey(apiKey: string): Promise<void> {
+/** 고른 제공업체의 키. 없으면 undefined */
+export function activeApiKey(settings: Pick<Settings, "provider" | "apiKeys">): string | undefined {
+  return settings.apiKeys[settings.provider] || undefined;
+}
+
+/** 번역에 쓸 제공업체를 저장한다. 기본(Anthropic)이면 저장값을 지운다. */
+export async function setProvider(provider: ProviderId): Promise<void> {
+  const stored = await readStored();
+  if (provider === DEFAULT_PROVIDER) delete stored.provider;
+  else stored.provider = provider;
+  await writeStored(stored);
+}
+
+/** 제공업체의 API 키를 저장한다. 빈 문자열이면 저장된 키를 지운다. */
+export async function setApiKey(apiKey: string, provider: ProviderId = "anthropic"): Promise<void> {
   const stored = await readStored();
   const apiKeys = { ...stored.apiKeys };
-  if (apiKey) apiKeys.anthropic = apiKey;
-  else delete apiKeys.anthropic;
+  if (apiKey) apiKeys[provider] = apiKey;
+  else delete apiKeys[provider];
   await writeStored({ ...stored, apiKeys });
 }
 
-/** 모델을 저장한다. 기본 모델이면 저장값을 지워, 나중에 기본 모델이 바뀌어도 그대로 따르게 한다. */
-export async function setModel(model: string): Promise<void> {
+/** 제공업체의 모델을 저장한다. 기본 모델이면 저장값을 지워, 나중에 기본 모델이 바뀌어도 그대로 따르게 한다. */
+export async function setModel(model: string, provider: ProviderId = "anthropic"): Promise<void> {
   const stored = await readStored();
-  if (model === DEFAULT_MODEL_ID) delete stored.model;
-  else stored.model = model;
+  const models = storedModels(stored);
+  delete stored.model; // 제공업체가 하나였을 때의 저장값은 models로 옮긴다
+  if (model === DEFAULT_MODELS[provider]) delete models[provider];
+  else models[provider] = model;
+  if (Object.keys(models).length === 0) delete stored.models;
+  else stored.models = models;
   await writeStored(stored);
+}
+
+function storedModels(stored: StoredSettings): Partial<Record<ProviderId, string>> {
+  return { ...(stored.model === undefined ? {} : { anthropic: stored.model }), ...stored.models };
 }
 
 /** 자동 번역 사이트 목록 (SPEC 6 autoTranslateOrigins). 비면 저장값을 지운다. */

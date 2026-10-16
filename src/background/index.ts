@@ -9,8 +9,10 @@ import {
   type TabState,
   type TestConnectionResult,
 } from "../shared/messages";
+import { isProviderId, providerInfo, type ProviderId } from "../shared/models";
+import { openRouterModelIds } from "../shared/openrouter-models";
 import { originPattern } from "../shared/sites";
-import { getSettings } from "../shared/storage";
+import { activeApiKey, getSettings } from "../shared/storage";
 import { recordUsage, type TokenUsage } from "../shared/usage";
 import {
   disableAutoTranslate,
@@ -25,12 +27,18 @@ import {
 import { cacheLimits, cacheStats, cleanUpCache, clearCache, currentTurn, startTurn } from "./cache";
 import { errorMessage, isKeyError, NO_API_KEY_MESSAGE } from "./errors";
 import { AnthropicProvider } from "./providers/anthropic";
+import { OpenRouterProvider } from "./providers/openrouter";
+import type { TranslationProvider } from "./providers/types";
 import { translateGroups } from "./translator";
 
 // 서비스 워커는 언제든 종료될 수 있으므로 상태는 chrome.storage와 각 탭의 콘텐츠 스크립트에 두고
 // 메모리에 의존하지 않는다 (SPEC 5.1).
 
-const provider = new AnthropicProvider();
+/** 옵션 페이지에서 고른 제공업체로 번역한다 (SPEC 13장 "OpenRouter 추가"). */
+const providers: Record<ProviderId, TranslationProvider> = {
+  anthropic: new AnthropicProvider(),
+  openrouter: new OpenRouterProvider(),
+};
 const MENU_ID = "translate-page";
 /** manifest.json의 commands 이름 */
 const TOGGLE_COMMAND = "toggle-translation";
@@ -107,13 +115,15 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
   if (!isExtensionPage(sender)) return false;
   switch (message?.type) {
     case "test-connection":
-      return respond(testConnection(message.apiKey, message.model));
+      return respond(testConnection(message.provider, message.apiKey, message.model));
     case "get-tab-state":
       return respond(tabState(message.tabId));
     case "tab-action":
       return respond(message.action === "translate" ? translateTab(message.tabId) : showOriginal(message.tabId));
     case "get-shortcut":
       return respond(shortcut());
+    case "get-openrouter-models":
+      return respond(openRouterModelIds());
     case "get-cache-stats":
       return respond(cacheStats());
     case "clear-cache":
@@ -134,8 +144,7 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
 
 /** 우클릭 메뉴·팝업의 "번역": 키가 없으면 옵션 페이지를 열고, 있으면 번역을 시작한다 (SPEC 13장). */
 async function translateTab(tabId: number): Promise<TabState> {
-  const { apiKeys } = await getSettings();
-  if (!apiKeys.anthropic) {
+  if (!activeApiKey(await getSettings())) {
     await chrome.runtime.openOptionsPage();
     return tabState(tabId);
   }
@@ -206,8 +215,11 @@ async function shortcut(): Promise<string> {
   return commands.find((command) => command.name === TOGGLE_COMMAND)?.shortcut ?? "";
 }
 
-async function testConnection(apiKey: string, model: string): Promise<TestConnectionResult> {
-  return provider.testConnection({ apiKey, model: model || (await getSettings()).model, onUsage: saveUsage });
+/** 옵션 페이지에서 고른 (저장 전) 제공업체·키·모델로 확인한다. 모델이 비어 있으면 그 제공업체의 저장된 모델 */
+async function testConnection(provider: unknown, apiKey: string, model: string): Promise<TestConnectionResult> {
+  const id: ProviderId = isProviderId(provider) ? provider : "anthropic";
+  const savedModel = (await getSettings()).models[id];
+  return providers[id].testConnection({ apiKey, model: model || savedModel, onUsage: saveUsage });
 }
 
 /** 캐시 상한·정리 기준을 바꾼 뒤 지금 설정으로 바로 정리한다 (SPEC 13장 "상한을 지금 사용량보다 낮추면"). */
@@ -251,7 +263,8 @@ async function handleTranslate(
     if (!signal.aborted) port.postMessage(message);
   };
   const settings = await getSettings();
-  const apiKey = settings.apiKeys.anthropic;
+  const apiKey = activeApiKey(settings);
+  const providerName = providerInfo(settings.provider).name;
   if (!apiKey) {
     post({ type: "error", message: NO_API_KEY_MESSAGE, needsSettings: true, missingKey: true });
     return;
@@ -263,7 +276,7 @@ async function handleTranslate(
   });
   try {
     const summary = await translateGroups({
-      provider,
+      provider: providers[settings.provider],
       apiKey,
       settings,
       groups,
@@ -276,14 +289,16 @@ async function handleTranslate(
       type: "done",
       failed: summary.failed,
       error:
-        summary.lastError === undefined ? undefined : errorMessage(summary.lastError, settings.model, "translation"),
+        summary.lastError === undefined
+          ? undefined
+          : errorMessage(summary.lastError, settings.model, "translation", providerName),
     });
   } catch (err) {
     if (signal.aborted) return;
     console.error("[AITranslator] 번역을 멈췄습니다.", err instanceof Error ? err.message : err);
     post({
       type: "error",
-      message: errorMessage(err, settings.model, "translation"),
+      message: errorMessage(err, settings.model, "translation", providerName),
       needsSettings: isKeyError(err),
       missingKey: false,
     });
