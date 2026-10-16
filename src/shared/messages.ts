@@ -23,6 +23,8 @@ export interface PageState {
   error?: string;
   /** 일부 그룹을 번역하지 못해 원문으로 두었는지 */
   partial: boolean;
+  /** partial일 때 그 원인 문구 (SPEC 13장 "실패 원인 표시") */
+  cause?: string;
 }
 
 /** 팝업이 보는 탭 상태: 콘텐츠 스크립트를 넣을 수 없는 페이지면 unsupported */
@@ -46,6 +48,10 @@ export type Message =
   | { type: "get-shortcut" }
   | { type: "get-cache-stats" }
   | { type: "clear-cache" }
+  // 사이트별 자동 번역 (SPEC 4.8): 팝업의 체크박스, 옵션 페이지의 삭제
+  | { type: "get-auto-translate"; origin: string }
+  | { type: "auto-translate-pending"; origin: string; tabId: number }
+  | { type: "set-auto-translate"; origin: string; enabled: boolean; tabId?: number }
   // 콘텐츠 스크립트의 알림에서 "설정 열기"를 눌렀을 때 (콘텐츠 스크립트는 옵션 페이지를 직접 열 수 없다)
   | { type: "open-options" };
 
@@ -62,6 +68,11 @@ interface Responses {
   "get-shortcut": string;
   "get-cache-stats": { count: number; bytes: number };
   "clear-cache": void;
+  /** 목록에 있고 권한도 있으면 true */
+  "get-auto-translate": boolean;
+  "auto-translate-pending": void;
+  /** 바뀐 뒤의 상태. 켜려 했지만 권한이 없으면 false */
+  "set-auto-translate": boolean;
   "open-options": void;
 }
 
@@ -76,7 +87,9 @@ export type ContentCommand = { type: "get-state" } | { type: "translate" } | { t
 export const TRANSLATE_PORT = "translate";
 
 export type ContentToBackground =
-  | { type: "translate"; groups: RequestGroup[] }
+  // newTurn: 페이지 번역을 시작하는 요청이면 true, 번역 보기 중 화면이 바뀌어 더 번역하는 요청이면 false.
+  // 캐시 정리의 턴을 센다 (SPEC 13장 "캐시 정리: 턴").
+  | { type: "translate"; groups: RequestGroup[]; newTurn: boolean }
   // 번역을 기다리는 동안 서비스 워커가 멈추지 않게 보낸다.
   | { type: "ping" };
 
@@ -86,4 +99,5 @@ export type BackgroundToContent =
   // failed: 번역하지 못해 원문으로 남은 그룹 수, error: 그 원인 (마지막 오류)
   | { type: "done"; failed: number; error?: string }
   // 키 오류처럼 번역 전체를 멈춘 오류. needsSettings면 알림에 "설정 열기"를 붙인다.
-  | { type: "error"; message: string; needsSettings: boolean };
+  // missingKey: 키가 아예 없음 (자동 번역 사이트에서는 알림 없이 건너뛴다, SPEC 13장)
+  | { type: "error"; message: string; needsSettings: boolean; missingKey: boolean };

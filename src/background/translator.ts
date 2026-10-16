@@ -1,6 +1,7 @@
 import type { RequestGroup, SegmentGroup } from "../shared/messages";
 import type { Settings } from "../shared/storage";
-import { cacheKey, lookupCache, storeCache } from "./cache";
+import type { TokenUsage } from "../shared/usage";
+import { cacheKey, cacheLimits, lookupCache, storeCache } from "./cache";
 import { validateGroups } from "./prompt";
 import { ProviderError, type TranslationProvider } from "./providers/types";
 
@@ -22,10 +23,14 @@ export interface TranslationJob {
   apiKey: string;
   settings: Settings;
   groups: RequestGroup[];
+  /** 캐시 정리의 턴. 이 번역에서 쓰거나 넣은 번역문은 이 턴에 쓴 것으로 적는다 (SPEC 13장). */
+  turn: number;
   /** 탭이 닫히거나 페이지를 옮기면 취소된다 (SPEC 5.4). */
   signal: AbortSignal;
   /** 배치가 끝날 때마다 검증을 통과한 그룹을 넘긴다. */
   onResults(groups: SegmentGroup[]): void;
+  /** API 응답이 올 때마다 그 사용량을 넘긴다 (재요청한 것, 쓸 수 없던 응답 포함). */
+  onUsage?(usage: TokenUsage): void;
 }
 
 export interface TranslationSummary {
@@ -57,7 +62,7 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
         const outcome = await limiter.run(() => translateBatch(job, batch, signal), signal);
         const done = assembler.complete(outcome.valid, outcome.failed);
         if (done.length > 0) {
-          saving.push(saveToCache(done, keyById));
+          saving.push(saveToCache(job, done, keyById));
           job.onResults(done);
         }
         if (outcome.error !== undefined) lastError = outcome.error;
@@ -77,7 +82,7 @@ export async function translateGroups(job: TranslationJob): Promise<TranslationS
 /** 캐시에 있는 그룹은 바로 넘기고, 없는 그룹과 그 캐시 키를 돌려준다. 저장소를 못 읽으면 캐시 없이 진행한다. */
 async function useCache(job: TranslationJob): Promise<{ misses: RequestGroup[]; keyById: Map<string, string> }> {
   const keys = await Promise.all(job.groups.map((group) => cacheKey(job.settings, group)));
-  const cached = await lookupCache(keys).catch((err: unknown) => {
+  const cached = await lookupCache(keys, job.turn).catch((err: unknown) => {
     console.warn("[AITranslator] 캐시를 읽지 못했습니다.", err);
     return new Map<string, string[]>();
   });
@@ -97,13 +102,17 @@ async function useCache(job: TranslationJob): Promise<{ misses: RequestGroup[]; 
   return { misses, keyById };
 }
 
-async function saveToCache(groups: readonly SegmentGroup[], keyById: ReadonlyMap<string, string>): Promise<void> {
+async function saveToCache(
+  job: TranslationJob,
+  groups: readonly SegmentGroup[],
+  keyById: ReadonlyMap<string, string>,
+): Promise<void> {
   const translations = new Map<string, string[]>();
   for (const group of groups) {
     const key = keyById.get(group.id);
     if (key) translations.set(key, group.segments);
   }
-  await storeCache(translations).catch((err: unknown) => {
+  await storeCache(translations, job.turn, cacheLimits(job.settings)).catch((err: unknown) => {
     console.warn("[AITranslator] 번역을 캐시에 저장하지 못했습니다.", err);
   });
 }
@@ -150,7 +159,7 @@ async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], sig
     try {
       return await job.provider.translate(
         { targetLanguage: "ko", glossary: job.settings.glossary, groups },
-        { apiKey: job.apiKey, model: job.settings.model, signal },
+        { apiKey: job.apiKey, model: job.settings.model, signal, onUsage: job.onUsage },
       );
     } catch (err) {
       if (!(err instanceof ProviderError) || signal.aborted) throw err;

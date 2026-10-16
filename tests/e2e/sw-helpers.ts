@@ -1,4 +1,5 @@
 import type { BrowserContext, Page, Worker } from "@playwright/test";
+import type { UsageStats } from "../../src/shared/usage";
 
 // 서비스 워커 안에서 실행하는 E2E 도우미. evaluate()에 넘기는 함수는 바깥 변수를 쓰지 않는다.
 
@@ -11,6 +12,11 @@ export interface ApiCall {
 
 export function readStorage(serviceWorker: Worker) {
   return serviceWorker.evaluate(() => chrome.storage.local.get(null));
+}
+
+/** 이번 달 사용량 (SPEC 4.10). 아직 없으면 undefined */
+export async function readUsage(serviceWorker: Worker): Promise<UsageStats | undefined> {
+  return (await readStorage(serviceWorker)).usage as UsageStats | undefined;
 }
 
 export async function storeApiKey(serviceWorker: Worker, apiKey: string): Promise<void> {
@@ -41,8 +47,14 @@ export interface MockApiOptions {
   gated?: boolean;
   /** 네트워크 오류를 낸다 */
   networkError?: boolean;
-  /** 이 상태 코드와 본문으로 응답한다 */
-  error?: { status: number; body: unknown };
+  /** 이 상태 코드·본문·헤더로 응답한다. times를 주면 처음 그 횟수만 */
+  error?: { status: number; body: unknown; headers?: Record<string, string>; times?: number };
+  /** JSON이 아닌 번역문을 돌려준다. times를 주면 처음 그 횟수만 */
+  invalidJson?: { times?: number };
+  /** 요청마다 첫 그룹에 세그먼트를 하나 더 붙여 개수를 틀리게 돌려준다 */
+  extraSegmentInFirstGroup?: boolean;
+  /** 응답의 usage (기본: 입력 1, 출력 1) */
+  usage?: Record<string, number>;
 }
 
 /**
@@ -50,11 +62,23 @@ export interface MockApiOptions {
  * 다시 부르면 동작만 바뀌고, 지금까지의 요청 기록(__apiCalls)은 이어진다.
  */
 export async function mockTranslationApi(serviceWorker: Worker, options: MockApiOptions = {}): Promise<void> {
-  await serviceWorker.evaluate(({ hang, gated, networkError, error }) => {
+  await serviceWorker.evaluate(({ hang, gated, networkError, error, invalidJson, extraSegmentInFirstGroup, usage }) => {
     const scope = globalThis as unknown as { __apiCalls?: ApiCall[] };
     const calls = scope.__apiCalls ?? [];
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
+    let errors = 0;
+    let invalid = 0;
+    const message = (text: string) =>
+      new Response(
+        JSON.stringify({
+          type: "message",
+          content: [{ type: "text", text }],
+          stop_reason: "end_turn",
+          usage: usage ?? { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     Object.assign(globalThis, {
       __apiCalls: calls,
       __apiAborted: false,
@@ -62,11 +86,16 @@ export async function mockTranslationApi(serviceWorker: Worker, options: MockApi
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         calls.push({ url: String(input), headers: init?.headers, body: String(init?.body) });
         if (networkError) throw new TypeError("Failed to fetch");
-        if (error) {
+        if (error && (error.times === undefined || errors < error.times)) {
+          errors++;
           return new Response(JSON.stringify(error.body), {
             status: error.status,
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...error.headers },
           });
+        }
+        if (invalidJson && (invalidJson.times === undefined || invalid < invalidJson.times)) {
+          invalid++;
+          return message("이건 JSON이 아닙니다");
         }
         if (gated) await gate;
         if (hang) {
@@ -81,19 +110,14 @@ export async function mockTranslationApi(serviceWorker: Worker, options: MockApi
         const { groups } = JSON.parse(request.messages[0].content) as {
           groups: { id: string; segments: string[] }[];
         };
-        const translated = groups.map((group) => ({
+        const translated = groups.map((group, i) => ({
           id: group.id,
-          segments: group.segments.map((segment) => segment.toUpperCase()),
+          segments: [
+            ...group.segments.map((segment) => segment.toUpperCase()),
+            ...(extraSegmentInFirstGroup && i === 0 ? ["EXTRA"] : []),
+          ],
         }));
-        return new Response(
-          JSON.stringify({
-            type: "message",
-            content: [{ type: "text", text: JSON.stringify({ groups: translated }) }],
-            stop_reason: "end_turn",
-            usage: { input_tokens: 1, output_tokens: 1 },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return message(JSON.stringify({ groups: translated }));
       },
     });
   }, options);

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestGroup, SegmentGroup } from "../../src/shared/messages";
 import { defaultSettings, type Settings } from "../../src/shared/storage";
+import type { TokenUsage } from "../../src/shared/usage";
 import {
   echoUppercase,
   errorResponse,
@@ -15,9 +16,10 @@ import { installChromeMock } from "./chrome-mock";
 // 동시 요청 제한은 모듈 전역이므로 테스트마다 모듈을 새로 불러온다.
 let translateGroups: typeof import("../../src/background/translator").translateGroups;
 let AnthropicProvider: typeof import("../../src/background/providers/anthropic").AnthropicProvider;
+let chromeMock: ReturnType<typeof installChromeMock>;
 
 beforeEach(async () => {
-  installChromeMock(); // 캐시 저장소 (chrome.storage.local)
+  chromeMock = installChromeMock(); // 캐시 저장소 (chrome.storage.local)
   vi.resetModules();
   ({ translateGroups } = await import("../../src/background/translator"));
   ({ AnthropicProvider } = await import("../../src/background/providers/anthropic"));
@@ -45,15 +47,25 @@ function stubFetchSequence(...responses: (() => Response | Promise<Response>)[])
   return stubFetch(async () => responses[Math.min(call++, responses.length - 1)]!());
 }
 
-function run(groups: RequestGroup[], options: { settings?: Partial<Settings>; signal?: AbortSignal } = {}) {
+function run(
+  groups: RequestGroup[],
+  options: {
+    settings?: Partial<Settings>;
+    signal?: AbortSignal;
+    turn?: number;
+    onUsage?: (usage: TokenUsage) => void;
+  } = {},
+) {
   const delivered: SegmentGroup[] = [];
   const promise = translateGroups({
     provider: new AnthropicProvider(),
     apiKey: "sk-ant-test",
     settings: { ...defaultSettings(), ...options.settings },
     groups,
+    turn: options.turn ?? 1,
     signal: options.signal ?? new AbortController().signal,
     onResults: (results) => delivered.push(...results),
+    onUsage: options.onUsage,
   });
   return { delivered, promise };
 }
@@ -407,6 +419,17 @@ describe("캐시 (SPEC 4.7, 13장)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("캐시에서 꺼내 쓴 번역문과 새로 넣은 번역문은 그 번역의 턴에 쓴 것으로 적는다 (SPEC 13장 \"캐시 정리\")", async () => {
+    stubFetch(echoUppercase);
+
+    await run([group("g1", "Docs")], { turn: 3 }).promise;
+    const key = Object.keys(chromeMock.storage).find((name) => name.startsWith("t:"))!;
+    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 3 });
+
+    await run([group("g1", "Docs")], { turn: 7 }).promise;
+    expect(chromeMock.storage[key]).toEqual({ s: ["DOCS"], u: 7 });
+  });
+
   it("번역하지 못해 원문으로 둔 그룹은 캐시하지 않는다", async () => {
     const fetchMock = stubFetchSequence(
       () => messageResponse("not json"),
@@ -420,5 +443,26 @@ describe("캐시 (SPEC 4.7, 13장)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(retry.delivered).toEqual([{ id: "g1", segments: ["안녕"] }]);
+  });
+});
+
+describe("사용량 (SPEC 4.10, 13장)", () => {
+  it("응답마다 사용량을 넘긴다. 형식 오류로 다시 보낸 응답도 센다", async () => {
+    stubFetchSequence(
+      () =>
+        messageResponse("not json", {
+          usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 0, output_tokens: 3 },
+        }),
+      () =>
+        translationResponse([{ id: "g1", segments: ["안녕"] }]),
+    );
+    const usages: TokenUsage[] = [];
+
+    await run([group("g1", "Hello")], { onUsage: (usage) => usages.push(usage) }).promise;
+
+    expect(usages).toEqual([
+      { inputTokens: 10, cacheWriteTokens: 5, cacheReadTokens: 0, outputTokens: 3 },
+      { inputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 50 },
+    ]);
   });
 });

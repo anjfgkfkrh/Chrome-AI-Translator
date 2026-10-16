@@ -9,8 +9,19 @@ import {
   type TabState,
   type TestConnectionResult,
 } from "../shared/messages";
+import { originPattern } from "../shared/sites";
 import { getSettings } from "../shared/storage";
-import { cacheStats, clearCache } from "./cache";
+import { recordUsage, type TokenUsage } from "../shared/usage";
+import {
+  disableAutoTranslate,
+  enableAutoTranslate,
+  forgetSite,
+  isAutoTranslated,
+  rememberPending,
+  syncAutoTranslate,
+  takePending,
+} from "./auto-translate";
+import { cacheStats, clearCache, currentTurn, startTurn } from "./cache";
 import { errorMessage, isKeyError, NO_API_KEY_MESSAGE } from "./errors";
 import { AnthropicProvider } from "./providers/anthropic";
 import { translateGroups } from "./translator";
@@ -26,9 +37,46 @@ const IDLE_STATE: PageState = { status: "idle", progress: { done: 0, total: 0 },
 
 chrome.runtime.onInstalled.addListener((details) => {
   void createContextMenu();
+  void syncAutoTranslate();
   // 시나리오 1: 설치하면 옵션 페이지를 연다.
   if (details.reason === "install") void chrome.runtime.openOptionsPage();
 });
+
+// 사이트별 자동 번역: 저장된 목록과 실제 권한을 맞춰 다시 등록한다 (SPEC 13장).
+chrome.runtime.onStartup.addListener(() => void syncAutoTranslate());
+
+// 팝업이 권한을 요청하는 사이 닫혀도, 남겨 둔 표시대로 이어서 켠다 (SPEC 13장 "권한 결과 처리").
+chrome.permissions.onAdded.addListener((permissions) => void onPermissionsAdded(permissions));
+// 사용자가 Chrome 설정에서 사이트 권한을 빼면 자동 번역도 끈다.
+chrome.permissions.onRemoved.addListener((permissions) => void onPermissionsRemoved(permissions));
+
+async function onPermissionsAdded(permissions: chrome.permissions.Permissions): Promise<void> {
+  const pending = await takePending();
+  if (pending && permissions.origins?.includes(originPattern(pending.origin))) {
+    await turnOnAutoTranslate(pending.origin, pending.tabId);
+  }
+}
+
+async function onPermissionsRemoved(permissions: chrome.permissions.Permissions): Promise<void> {
+  const { autoTranslateOrigins } = await getSettings();
+  for (const origin of autoTranslateOrigins) {
+    if (permissions.origins?.includes(originPattern(origin))) await forgetSite(origin);
+  }
+}
+
+/** 자동 번역을 켜고, 지금 보고 있는 페이지도 바로 번역한다 (SPEC 13장 "자동 번역을 켤 때"). */
+async function turnOnAutoTranslate(origin: string, tabId: number | undefined): Promise<boolean> {
+  const enabled = await enableAutoTranslate(origin);
+  if (enabled && tabId !== undefined) await translateTab(tabId);
+  return enabled;
+}
+
+async function setAutoTranslate(origin: string, enabled: boolean, tabId: number | undefined): Promise<boolean> {
+  await takePending(); // 팝업이 결과를 직접 알려 왔으므로 남겨 둔 표시는 지운다
+  if (enabled) return turnOnAutoTranslate(origin, tabId);
+  await disableAutoTranslate(origin);
+  return false;
+}
 
 async function createContextMenu(): Promise<void> {
   await chrome.contextMenus.removeAll();
@@ -69,6 +117,12 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
       return respond(cacheStats());
     case "clear-cache":
       return respond(clearCache());
+    case "get-auto-translate":
+      return respond(isAutoTranslated(message.origin));
+    case "auto-translate-pending":
+      return respond(rememberPending(message.origin, message.tabId));
+    case "set-auto-translate":
+      return respond(setAutoTranslate(message.origin, message.enabled, message.tabId));
   }
   return false;
 });
@@ -148,7 +202,12 @@ async function shortcut(): Promise<string> {
 }
 
 async function testConnection(apiKey: string, model: string): Promise<TestConnectionResult> {
-  return provider.testConnection({ apiKey, model: model || (await getSettings()).model });
+  return provider.testConnection({ apiKey, model: model || (await getSettings()).model, onUsage: saveUsage });
+}
+
+/** 사용량을 더한다 (SPEC 4.10). 저장하지 못해도 번역은 계속한다. */
+function saveUsage(usage: TokenUsage): void {
+  recordUsage(usage).catch((err: unknown) => console.warn("[AITranslator] 사용량을 저장하지 못했습니다.", err));
 }
 
 function isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
@@ -167,29 +226,41 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => controller.abort());
   port.onMessage.addListener((message: ContentToBackground) => {
     if (message?.type === "translate" && Array.isArray(message.groups)) {
-      void handleTranslate(port, message.groups, controller.signal);
+      void handleTranslate(port, message.groups, message.newTurn === true, controller.signal);
     }
   });
 });
 
-async function handleTranslate(port: chrome.runtime.Port, groups: RequestGroup[], signal: AbortSignal): Promise<void> {
+async function handleTranslate(
+  port: chrome.runtime.Port,
+  groups: RequestGroup[],
+  newTurn: boolean,
+  signal: AbortSignal,
+): Promise<void> {
   const post = (message: BackgroundToContent) => {
     if (!signal.aborted) port.postMessage(message);
   };
   const settings = await getSettings();
   const apiKey = settings.apiKeys.anthropic;
   if (!apiKey) {
-    post({ type: "error", message: NO_API_KEY_MESSAGE, needsSettings: true });
+    post({ type: "error", message: NO_API_KEY_MESSAGE, needsSettings: true, missingKey: true });
     return;
   }
+  // 캐시 정리의 턴: 페이지 번역을 시작하는 요청만 새 턴을 연다 (SPEC 13장).
+  const turn = await (newTurn ? startTurn() : currentTurn()).catch((err: unknown) => {
+    console.warn("[AITranslator] 캐시 턴을 읽지 못했습니다.", err);
+    return 0;
+  });
   try {
     const summary = await translateGroups({
       provider,
       apiKey,
       settings,
       groups,
+      turn,
       signal,
       onResults: (results) => post({ type: "results", groups: results }),
+      onUsage: saveUsage,
     });
     post({
       type: "done",
@@ -204,6 +275,7 @@ async function handleTranslate(port: chrome.runtime.Port, groups: RequestGroup[]
       type: "error",
       message: errorMessage(err, settings.model, "translation"),
       needsSettings: isKeyError(err),
+      missingKey: false,
     });
   }
 }

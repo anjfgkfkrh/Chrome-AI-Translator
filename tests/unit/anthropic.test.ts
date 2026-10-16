@@ -24,6 +24,20 @@ function stubFetch(impl: () => Promise<Response>) {
 }
 
 describe("AnthropicProvider.testConnection", () => {
+  it("연결 테스트의 사용량도 알린다 (SPEC 13장 \"사용량에 넣는 응답\")", async () => {
+    stubFetch(async () => messageResponse("pong", { usage: { input_tokens: 8, output_tokens: 4 } }));
+    const onUsage = vi.fn();
+
+    await provider.testConnection({ apiKey, model, onUsage });
+
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 8,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 4,
+    });
+  });
+
   it("SPEC 5.3 형식으로 짧은 요청을 1회 보낸다", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, { type: "message", content: [] }));
 
@@ -130,7 +144,7 @@ describe("AnthropicProvider.translate", () => {
     expect(requestBody(fetchMock.mock.calls[0]![1])).not.toHaveProperty("output_config");
   });
 
-  it("text 블록만 읽어 그룹과 사용량(캐시 포함 입력 토큰)을 돌려준다", async () => {
+  it("text 블록만 읽어 그룹과 사용량(입력·캐시 쓰기·캐시 읽기·출력)을 돌려준다", async () => {
     stubFetch(async () =>
       messageResponse("", {
         content: [
@@ -144,8 +158,35 @@ describe("AnthropicProvider.translate", () => {
 
     expect(await provider.translate(request, { apiKey, model })).toEqual({
       groups: [{ id: "g1", segments: ["시작하기"] }],
-      usage: { inputTokens: 620, outputTokens: 15 },
+      usage: { inputTokens: 20, cacheWriteTokens: 600, cacheReadTokens: 0, outputTokens: 15 },
     });
+  });
+
+  it.each([
+    ["거절", '{"groups":[', { stop_reason: "refusal" }],
+    ["max_tokens에서 잘림", '{"groups":[', { stop_reason: "max_tokens" }],
+    ["JSON 아님", "not json", {}],
+  ])("쓸 수 없는 응답(%s)도 사용량을 알린다 (SPEC 13장 \"사용량에 넣는 응답\")", async (_case, text, extra) => {
+    stubFetch(async () => messageResponse(text, extra));
+    const onUsage = vi.fn();
+
+    await expect(provider.translate(request, { apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
+
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 100,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 50,
+    });
+  });
+
+  it("오류 응답(HTTP 429 등)에는 사용량이 없으므로 알리지 않는다", async () => {
+    stubFetch(async () => apiError(429, "rate_limit_error", "slow down"));
+    const onUsage = vi.fn();
+
+    await expect(provider.translate(request, { apiKey, model, onUsage })).rejects.toBeInstanceOf(ProviderError);
+
+    expect(onUsage).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,9 +1,11 @@
 import { isListedModel } from "../../shared/models";
+import type { TokenUsage } from "../../shared/usage";
 import { errorMessage } from "../errors";
 import { parseResponse, RESPONSE_SCHEMA, systemPrompt, userMessage } from "../prompt";
 import {
   ProviderError,
   type ProviderErrorKind,
+  type RequestOptions,
   type TranslateRequest,
   type TranslateResponse,
   type TranslationProvider,
@@ -31,7 +33,7 @@ export class AnthropicProvider implements TranslationProvider {
 
   async translate(
     req: TranslateRequest,
-    { apiKey, model, signal }: { apiKey: string; model: string; signal?: AbortSignal },
+    { apiKey, model, signal, onUsage }: RequestOptions & { signal?: AbortSignal },
   ): Promise<TranslateResponse> {
     const body: Record<string, unknown> = {
       model,
@@ -46,23 +48,27 @@ export class AnthropicProvider implements TranslationProvider {
     }
 
     const res = (await postMessages(apiKey, body, signal)) as MessageResponse;
+    const usage = toUsage(res.usage);
+    if (usage) onUsage?.(usage);
     if (res.stop_reason === "refusal") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
     if (res.stop_reason === "max_tokens") throw new ProviderError("format", "응답이 max_tokens에서 잘렸습니다.");
     const text = (res.content ?? [])
       .filter((block) => block.type === "text")
       .map((block) => block.text ?? "")
       .join("");
-    return { groups: parseResponse(text), usage: toUsage(res.usage) };
+    return { groups: parseResponse(text), usage };
   }
 
   /** 짧은 요청 1회. 재시도하지 않는다 (SPEC 13장). */
-  async testConnection({ apiKey, model }: { apiKey: string; model: string }) {
+  async testConnection({ apiKey, model, onUsage }: RequestOptions) {
     try {
-      await postMessages(
+      const res = (await postMessages(
         apiKey,
         { model, max_tokens: 16, messages: [{ role: "user", content: "ping" }] },
         AbortSignal.timeout(TEST_TIMEOUT_MS),
-      );
+      )) as MessageResponse;
+      const usage = toUsage(res.usage);
+      if (usage) onUsage?.(usage);
       return { ok: true, message: `연결 성공 (${model})` };
     } catch (err) {
       return { ok: false, message: errorMessage(err, model) };
@@ -127,12 +133,13 @@ async function readErrorMessage(res: Response): Promise<string | undefined> {
   }
 }
 
-function toUsage(usage: MessageResponse["usage"]): TranslateResponse["usage"] {
+/** 입력은 캐시를 쓰지 않은 부분, 캐시에 쓴 부분, 캐시에서 읽은 부분으로 따로 온다 (SPEC 13장 "사용량 표시"). */
+function toUsage(usage: MessageResponse["usage"]): TokenUsage | undefined {
   if (!usage) return undefined;
   return {
-    // 캐시에 쓰거나 캐시에서 읽은 입력도 입력 토큰에 넣는다.
-    inputTokens:
-      (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
+    inputTokens: usage.input_tokens ?? 0,
+    cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
     outputTokens: usage.output_tokens ?? 0,
   };
 }

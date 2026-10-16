@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { echoUppercase, requestBody } from "../helpers/anthropic-mock";
+import { monthOf } from "../../src/shared/usage";
+import { echoUppercase, messageResponse, requestBody } from "../helpers/anthropic-mock";
 import { createPort, EXTENSION_ID, installChromeMock } from "./chrome-mock";
 
 let chromeMock: ReturnType<typeof installChromeMock>;
@@ -21,10 +22,19 @@ const contentScript: chrome.runtime.MessageSender = {
   tab: { id: 7 } as chrome.tabs.Tab,
 };
 
+const popup: chrome.runtime.MessageSender = { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup/popup.html` };
+
 function sendToBackground(message: unknown, sender: chrome.runtime.MessageSender) {
   const sendResponse = vi.fn();
   const keepOpen = chromeMock.onMessage[0]!(message, sender, sendResponse);
   return { keepOpen, sendResponse };
+}
+
+/** 메시지를 보내고 응답을 기다린다. */
+async function ask(message: unknown, sender = popup) {
+  const { keepOpen, sendResponse } = sendToBackground(message, sender);
+  if (keepOpen) await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+  return sendResponse.mock.calls[0]?.[0];
 }
 
 function stubFetchOk() {
@@ -153,7 +163,9 @@ describe("번역 포트", () => {
     receive({ type: "translate", groups: [{ id: "g1", segments: ["Hello"] }] });
 
     await vi.waitFor(() =>
-      expect(posted).toEqual([{ type: "error", message: "API 키를 먼저 설정하세요", needsSettings: true }]),
+      expect(posted).toEqual([
+        { type: "error", message: "API 키를 먼저 설정하세요", needsSettings: true, missingKey: true },
+      ]),
     );
   });
 
@@ -170,7 +182,9 @@ describe("번역 포트", () => {
     receive({ type: "translate", groups: [{ id: "g1", segments: ["Hello"] }] });
 
     await vi.waitFor(() =>
-      expect(posted).toEqual([{ type: "error", message: "API 키를 확인하세요.", needsSettings: true }]),
+      expect(posted).toEqual([
+        { type: "error", message: "API 키를 확인하세요.", needsSettings: true, missingKey: false },
+      ]),
     );
   });
 
@@ -190,7 +204,12 @@ describe("번역 포트", () => {
 
     await vi.waitFor(() =>
       expect(posted).toEqual([
-        { type: "error", message: "번역 실패: Your credit balance is too low.", needsSettings: false },
+        {
+          type: "error",
+          message: "번역 실패: Your credit balance is too low.",
+          needsSettings: false,
+          missingKey: false,
+        },
       ]),
     );
   });
@@ -266,14 +285,6 @@ describe("단축키 (SPEC 4.8, 13장)", () => {
 });
 
 describe("팝업 메시지", () => {
-  const popup: chrome.runtime.MessageSender = { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup/popup.html` };
-
-  async function ask(message: unknown, sender = popup) {
-    const { keepOpen, sendResponse } = sendToBackground(message, sender);
-    if (keepOpen) await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
-    return sendResponse.mock.calls[0]?.[0];
-  }
-
   it("탭 상태: 콘텐츠 스크립트가 있으면 그 상태를 돌려준다", async () => {
     chromeMock.tabsSendMessage.mockResolvedValue(translatedState);
 
@@ -331,5 +342,218 @@ describe("팝업 메시지", () => {
     sendToBackground({ type: "open-options" }, contentScript);
 
     expect(chromeMock.openOptionsPage).toHaveBeenCalledOnce();
+  });
+});
+
+describe("사이트별 자동 번역 (SPEC 4.8, 13장)", () => {
+  const origin = "https://docs.example.com";
+  const registeredScript = {
+    id: `auto:${origin}`,
+    matches: [`${origin}/*`],
+    js: ["auto.js", "content.js"],
+    runAt: "document_idle",
+    persistAcrossSessions: true,
+  };
+
+  it("켜면 목록에 넣고 그 출처에만 콘텐츠 스크립트를 등록하고, 지금 페이지도 바로 번역한다", async () => {
+    saveKey();
+
+    expect(await ask({ type: "set-auto-translate", origin, enabled: true, tabId: 7 })).toBe(true);
+
+    expect(chromeMock.storage.settings).toMatchObject({ autoTranslateOrigins: [origin] });
+    expect(chromeMock.registered).toEqual([registeredScript]);
+    expect(chromeMock.executeScript).toHaveBeenCalledWith({ target: { tabId: 7 }, files: ["content.js"] });
+  });
+
+  it("이미 켜져 있으면 같은 출처를 다시 넣거나 다시 등록하지 않는다", async () => {
+    await ask({ type: "set-auto-translate", origin, enabled: true });
+
+    expect(await ask({ type: "set-auto-translate", origin, enabled: true })).toBe(true);
+
+    expect(chromeMock.storage.settings).toEqual({ autoTranslateOrigins: [origin] });
+    expect(chromeMock.registerContentScripts).toHaveBeenCalledOnce();
+    expect(chromeMock.registered).toEqual([registeredScript]);
+  });
+
+  it("그 출처의 권한이 없으면 켜지 않는다", async () => {
+    saveKey();
+    chromeMock.containsPermissions.mockResolvedValue(false);
+
+    expect(await ask({ type: "set-auto-translate", origin, enabled: true, tabId: 7 })).toBe(false);
+
+    expect(chromeMock.storage.settings).not.toHaveProperty("autoTranslateOrigins");
+    expect(chromeMock.registered).toEqual([]);
+    expect(chromeMock.executeScript).not.toHaveBeenCalled();
+  });
+
+  it("끄면 목록에서 빼고 등록을 풀고 권한도 돌려준다", async () => {
+    await ask({ type: "set-auto-translate", origin, enabled: true });
+
+    expect(await ask({ type: "set-auto-translate", origin, enabled: false })).toBe(false);
+
+    expect(chromeMock.storage.settings).not.toHaveProperty("autoTranslateOrigins");
+    expect(chromeMock.registered).toEqual([]);
+    expect(chromeMock.removePermissions).toHaveBeenCalledWith({ origins: [`${origin}/*`] });
+  });
+
+  it("권한을 돌려줄 수 없어도(필수 권한) 끄기는 끝난다", async () => {
+    await ask({ type: "set-auto-translate", origin, enabled: true });
+    chromeMock.removePermissions.mockRejectedValueOnce(new Error("You cannot remove required permissions."));
+
+    expect(await ask({ type: "set-auto-translate", origin, enabled: false })).toBe(false);
+
+    expect(chromeMock.registered).toEqual([]);
+  });
+
+  it("팝업이 권한 창 때문에 닫혀도, 권한이 추가되면 남겨 둔 요청대로 켜고 그 탭을 번역한다", async () => {
+    saveKey();
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+
+    chromeMock.onPermissionsAdded[0]!({ origins: [`${origin}/*`] });
+
+    await vi.waitFor(() =>
+      expect(chromeMock.executeScript).toHaveBeenCalledWith({ target: { tabId: 9 }, files: ["content.js"] }),
+    );
+    expect(chromeMock.registered).toEqual([registeredScript]);
+    expect(chromeMock.session).toEqual({});
+  });
+
+  it("권한 창에서 허용한 뒤 팝업과 권한 이벤트가 함께 켜도 한 번만 등록한다", async () => {
+    saveKey();
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+
+    chromeMock.onPermissionsAdded[0]!({ origins: [`${origin}/*`] });
+    expect(await ask({ type: "set-auto-translate", origin, enabled: true, tabId: 9 })).toBe(true);
+
+    await vi.waitFor(() => expect(chromeMock.registerContentScripts).toHaveBeenCalledOnce());
+    expect(chromeMock.registered).toEqual([registeredScript]);
+    expect(chromeMock.storage.settings).toMatchObject({ autoTranslateOrigins: [origin] });
+  });
+
+  it("브라우저 시작 때 설치·시작 이벤트가 함께 와도 한 번만 등록한다", async () => {
+    chromeMock.storage.settings = { autoTranslateOrigins: [origin] };
+
+    chromeMock.onInstalled[0]!({ reason: "update", previousVersion: "0.0.1" });
+    chromeMock.onStartup[0]!();
+
+    await vi.waitFor(() => expect(chromeMock.registered).toEqual([registeredScript]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chromeMock.registerContentScripts).toHaveBeenCalledOnce();
+  });
+
+  it("남겨 둔 요청과 다른 권한이 추가되면 아무것도 켜지 않는다", async () => {
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+
+    chromeMock.onPermissionsAdded[0]!({ origins: ["https://other.example.com/*"] });
+
+    await vi.waitFor(() => expect(chromeMock.session).toEqual({}));
+    expect(chromeMock.registered).toEqual([]);
+  });
+
+  it("팝업이 결과를 직접 알려 오면 남겨 둔 요청은 지운다 (두 번 켜지 않도록)", async () => {
+    await ask({ type: "auto-translate-pending", origin, tabId: 9 });
+
+    await ask({ type: "set-auto-translate", origin, enabled: false });
+
+    expect(chromeMock.session).toEqual({});
+  });
+
+  it("Chrome 설정에서 사이트 권한을 빼면 자동 번역도 끈다", async () => {
+    await ask({ type: "set-auto-translate", origin, enabled: true });
+
+    chromeMock.onPermissionsRemoved[0]!({ origins: [`${origin}/*`] });
+
+    await vi.waitFor(() => expect(chromeMock.registered).toEqual([]));
+    expect(chromeMock.storage.settings).not.toHaveProperty("autoTranslateOrigins");
+  });
+
+  it("브라우저를 시작하면 목록을 실제 권한에 맞추고, 등록도 목록에 맞춘다", async () => {
+    chromeMock.storage.settings = { autoTranslateOrigins: [origin, "https://revoked.example.com"] };
+    chromeMock.containsPermissions.mockImplementation(async ({ origins }) => origins?.[0] === `${origin}/*`);
+    chromeMock.registered.push({
+      id: "auto:https://stale.example.com",
+      matches: ["https://stale.example.com/*"],
+      js: ["auto.js", "content.js"],
+    });
+
+    chromeMock.onStartup[0]!();
+
+    await vi.waitFor(() => expect(chromeMock.registered).toEqual([registeredScript]));
+    expect(chromeMock.storage.settings).toEqual({ autoTranslateOrigins: [origin] });
+  });
+
+  it("확장을 업데이트하면 남아 있던 등록을 지금 버전의 설정으로 고친다", async () => {
+    chromeMock.storage.settings = { autoTranslateOrigins: [origin] };
+    chromeMock.registered.push({ id: `auto:${origin}`, matches: [`${origin}/*`], js: ["old.js"] });
+
+    chromeMock.onInstalled[0]!({ reason: "update", previousVersion: "0.0.1" });
+
+    await vi.waitFor(() => expect(chromeMock.registered).toEqual([registeredScript]));
+    expect(chromeMock.registerContentScripts).not.toHaveBeenCalled();
+  });
+
+  it("팝업 체크박스 상태: 목록에 있고 권한도 있을 때만 켜짐", async () => {
+    expect(await ask({ type: "get-auto-translate", origin })).toBe(false);
+
+    await ask({ type: "set-auto-translate", origin, enabled: true });
+    expect(await ask({ type: "get-auto-translate", origin })).toBe(true);
+
+    chromeMock.containsPermissions.mockResolvedValue(false);
+    expect(await ask({ type: "get-auto-translate", origin })).toBe(false);
+  });
+
+  it("웹 페이지(콘텐츠 스크립트)는 자동 번역을 켤 수 없다", () => {
+    const { keepOpen } = sendToBackground({ type: "set-auto-translate", origin, enabled: true }, contentScript);
+
+    expect(keepOpen).toBe(false);
+    expect(chromeMock.registerContentScripts).not.toHaveBeenCalled();
+  });
+});
+
+describe("캐시 정리의 턴과 사용량 (SPEC 13장)", () => {
+  async function translateOnce(newTurn: boolean) {
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+    receive({ type: "translate", groups: [{ id: "g1", segments: ["Docs"] }], newTurn });
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: "done" }));
+  }
+
+  function cacheEntry() {
+    return Object.entries(chromeMock.storage).find(([key]) => key.startsWith("t:"))?.[1];
+  }
+
+  it("페이지 번역을 시작하는 요청이면 새 턴을 열고, 화면 변화로 더 번역하는 요청이면 지금 턴을 쓴다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+
+    await translateOnce(true);
+    expect(chromeMock.storage.cacheTurn).toBe(1);
+    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 1 });
+
+    await translateOnce(false);
+    expect(chromeMock.storage.cacheTurn).toBe(1);
+
+    await translateOnce(true);
+    expect(chromeMock.storage.cacheTurn).toBe(2);
+    expect(cacheEntry()).toEqual({ s: ["DOCS"], u: 2 });
+  });
+
+  it("번역 응답과 연결 테스트의 사용량을 이번 달 사용량에 더한다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    await translateOnce(true);
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => messageResponse("pong")));
+    await ask({ type: "test-connection", apiKey: "sk-ant-typed", model: "claude-haiku-5-5" }, optionsPage);
+
+    await vi.waitFor(() =>
+      expect(chromeMock.storage.usage).toEqual({
+        month: monthOf(new Date()),
+        inputTokens: 200,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 100,
+      }),
+    );
   });
 });

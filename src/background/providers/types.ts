@@ -1,14 +1,22 @@
 import type { RequestGroup, SegmentGroup } from "../../shared/messages";
+import type { TokenUsage } from "../../shared/usage";
 
 // 번역 제공업체 인터페이스 (SPEC 5.2). MVP는 AnthropicProvider만 구현한다.
 
 export interface TranslationProvider {
   id: "anthropic" | "openai" | "gemini" | "openai-compatible";
-  translate(
-    req: TranslateRequest,
-    opts: { apiKey: string; model: string; signal?: AbortSignal },
-  ): Promise<TranslateResponse>;
-  testConnection(opts: { apiKey: string; model: string }): Promise<{ ok: boolean; message?: string }>;
+  translate(req: TranslateRequest, opts: RequestOptions & { signal?: AbortSignal }): Promise<TranslateResponse>;
+  testConnection(opts: RequestOptions): Promise<{ ok: boolean; message?: string }>;
+}
+
+export interface RequestOptions {
+  apiKey: string;
+  model: string;
+  /**
+   * 응답이 올 때마다 그 사용량을 알린다. 쓸 수 없는 응답(거절, 잘림, 형식 오류)도 요금이 나가므로 알린다
+   * (SPEC 13장 "사용량에 넣는 응답").
+   */
+  onUsage?(usage: TokenUsage): void;
 }
 
 export interface TranslateRequest {
@@ -19,7 +27,7 @@ export interface TranslateRequest {
 
 export interface TranslateResponse {
   groups: SegmentGroup[];
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: TokenUsage;
 }
 
 /** 제공업체와 무관한 오류 분류. 안내 문구와 재시도 정책(SPEC 5.4)이 이 값으로 갈린다. */

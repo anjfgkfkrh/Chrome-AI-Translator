@@ -33,15 +33,41 @@
           <button id="test" type="button">연결 테스트</button>
           <button id="save" type="button">저장</button>
         </div>
-        <p id="status" role="status"></p>
+        <p id="status" class="status" role="status"></p>
+      </section>
+      <section>
+        <h2>용어집</h2>
+        <label for="glossary-keep">번역하지 않을 단어</label>
+        <p id="glossary-keep-hint" class="hint">한 줄에 하나씩</p>
+        <textarea id="glossary-keep" rows="6" spellcheck="false" aria-describedby="glossary-keep-hint"></textarea>
+        <label for="glossary-map">지정 번역어</label>
+        <p id="glossary-map-hint" class="hint">한 줄에 하나씩, 원어 = 번역어 (예: agent = 에이전트)</p>
+        <textarea id="glossary-map" rows="6" spellcheck="false" aria-describedby="glossary-map-hint"></textarea>
+        <div class="row">
+          <button id="save-glossary" type="button">용어집 저장</button>
+        </div>
+        <p id="glossary-status" class="status" aria-live="polite"></p>
+      </section>
+      <section>
+        <h2>자동 번역 사이트</h2>
+        <ul id="auto-sites"></ul>
+        <p id="auto-sites-empty" hidden>자동 번역 사이트가 없습니다.</p>
       </section>
       <section>
         <h2>저장된 번역</h2>
         <p id="cache-summary"></p>
+        <p class="cleanup">
+          <label>캐시가 <input id="cleanup-percent" type="number" min="10" max="100" step="1" />% 이상 차면</label>
+          <label>최근 <input id="idle-turns" type="number" min="1" max="1000" step="1" />번의 번역에서 쓰이지 않은 번역문을 지웁니다.</label>
+        </p>
         <div class="row">
           <button id="clear-cache" type="button">캐시 비우기</button>
         </div>
         <p id="cache-status" aria-live="polite"></p>
+      </section>
+      <section>
+        <h2>사용량</h2>
+        <p id="usage"></p>
       </section>
       <p id="shortcut" class="note"></p>
     </main>

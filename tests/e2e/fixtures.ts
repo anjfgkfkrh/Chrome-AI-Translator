@@ -15,18 +15,14 @@ export const test = base.extend<{
 }>({
   extensionPath: [EXTENSION_PATH, { option: true }],
   context: async ({ extensionPath }, use) => {
-    const context = await chromium.launchPersistentContext("", {
-      // 확장 프로그램은 headless shell이 아닌 전체 Chromium에서만 실행된다.
-      channel: "chromium",
-      args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
-    });
+    const context = await launchWithExtension(extensionPath);
     // 설치하면 옵션 페이지가 열린다(시나리오 1). 테스트의 페이지 이동과 겹치지 않게 열릴 때까지 기다린다.
     await waitForOptionsPage(context);
     await use(context);
     await context.close();
   },
   serviceWorker: async ({ context }, use) => {
-    await use(context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker")));
+    await use(await serviceWorkerOf(context));
   },
   extensionId: async ({ serviceWorker }, use) => {
     await use(new URL(serviceWorker.url()).host);
@@ -35,7 +31,20 @@ export const test = base.extend<{
 
 export const expect = test.expect;
 
-async function waitForOptionsPage(context: BrowserContext): Promise<void> {
+/** userDataDir를 주면 그 프로필로 띄운다 (브라우저 재시작 테스트). 비우면 임시 프로필 */
+export function launchWithExtension(extensionPath: string, userDataDir = ""): Promise<BrowserContext> {
+  return chromium.launchPersistentContext(userDataDir, {
+    // 확장 프로그램은 headless shell이 아닌 전체 Chromium에서만 실행된다.
+    channel: "chromium",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+}
+
+export async function serviceWorkerOf(context: BrowserContext): Promise<Worker> {
+  return context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+}
+
+export async function waitForOptionsPage(context: BrowserContext): Promise<void> {
   for (let tries = 0; tries < 100; tries++) {
     if (context.pages().some((page) => page.url().endsWith("/options/options.html"))) return;
     await new Promise((resolve) => setTimeout(resolve, 100));

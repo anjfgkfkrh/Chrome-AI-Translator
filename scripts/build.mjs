@@ -26,7 +26,11 @@ const builds = [
   },
   {
     format: "iife",
-    entryPoints: [{ in: "src/content/index.ts", out: "content" }],
+    entryPoints: [
+      { in: "src/content/index.ts", out: "content" },
+      // 사이트별 자동 번역으로 등록할 때 content.js 앞에 넣는다 (SPEC 4.8)
+      { in: "src/content/auto.ts", out: "auto" },
+    ],
   },
 ];
 

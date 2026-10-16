@@ -1,18 +1,41 @@
 import type { RequestGroup } from "../shared/messages";
+import { serialQueue } from "../shared/serial";
 import type { Settings } from "../shared/storage";
 
-// 번역 캐시 (SPEC 4.7, 13장 "캐시 용량"·"캐시 저장 방식"·"캐시 키").
+// 번역 캐시 (SPEC 4.7, 13장 "캐시 용량"·"캐시 저장 방식"·"캐시 키"·"캐시 정리").
 // 문자열(그룹)마다 chrome.storage.local에 항목 하나를 두고, 페이지가 달라도 같은 문자열이면 재사용한다.
+// 페이지 번역 한 번을 한 턴으로 세어, 용량이 차면 오래 쓰이지 않은 번역문부터 지운다.
 
 const KEY_PREFIX = "t:";
-/** 전체 상한. 넘으면 오래 쓰지 않은 항목부터 TARGET_BYTES가 될 때까지 지운다. */
+/** 지금까지 연 턴 수 */
+const TURN_KEY = "cacheTurn";
+/** 캐시 상한. 정리한 뒤에도 넘으면 오래 쓰지 않은 것부터 TARGET_BYTES가 될 때까지 지운다. */
 const MAX_BYTES = 8 * 1024 * 1024;
 const TARGET_BYTES = 7 * 1024 * 1024;
 
-/** 저장 형식. 항목이 많으므로 이름을 짧게 쓴다: s = 번역된 세그먼트, t = 마지막으로 쓴 시각(ms) */
+/** 저장 형식. 항목이 많으므로 이름을 짧게 쓴다: s = 번역된 세그먼트, u = 마지막으로 쓴 턴 */
 interface Entry {
   s: string[];
-  t: number;
+  /** M5 형식(t = 시각)으로 저장된 항목에는 없다. 턴 0으로 본다 (SPEC 13장). */
+  u?: number;
+}
+
+export interface CacheLimits {
+  maxBytes: number;
+  targetBytes: number;
+  /** 상한의 몇 %부터 정리할지 */
+  cleanupPercent: number;
+  /** 최근 몇 턴 동안 쓰이지 않은 번역문을 지울지 */
+  idleTurns: number;
+}
+
+export function cacheLimits(settings: Settings): CacheLimits {
+  return {
+    maxBytes: MAX_BYTES,
+    targetBytes: TARGET_BYTES,
+    cleanupPercent: settings.cacheCleanupPercent,
+    idleTurns: settings.cacheIdleTurns,
+  };
 }
 
 /** hash(제공업체 + 모델 + 대상 언어 + 용어집 버전 + 세그먼트 원문 + context), SHA-256 앞 128비트 */
@@ -29,31 +52,51 @@ export async function cacheKey(settings: Settings, group: RequestGroup): Promise
   return KEY_PREFIX + [...digest.subarray(0, 16)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** 캐시에서 찾는다. 찾은 항목은 마지막 사용 시각을 새로 적는다 (오래 쓰지 않은 것부터 지우기 위해). */
-export async function lookupCache(keys: readonly string[]): Promise<Map<string, string[]>> {
+// 탭 여러 개가 동시에 번역을 시작해도 턴을 잃지 않게 하나씩 센다.
+const counting = serialQueue();
+// 배치가 동시에 끝나도 정리는 하나씩 한다.
+const cleaning = serialQueue();
+
+/** 새 턴을 열고 그 번호를 돌려준다. 페이지 번역을 시작할 때 부른다 (SPEC 13장 "캐시 정리: 턴"). */
+export function startTurn(): Promise<number> {
+  return counting(async () => {
+    const turn = (await currentTurn()) + 1;
+    await chrome.storage.local.set({ [TURN_KEY]: turn });
+    return turn;
+  });
+}
+
+/** 지금 턴. 번역 보기 중 화면이 바뀌어 더 번역할 때는 새 턴을 열지 않고 이 값을 쓴다. */
+export async function currentTurn(): Promise<number> {
+  const { [TURN_KEY]: turn } = await chrome.storage.local.get<Record<string, unknown>>(TURN_KEY);
+  return typeof turn === "number" ? turn : 0;
+}
+
+/** 캐시에서 찾는다. 찾은 번역문은 이번 턴에 쓴 것으로 적는다. */
+export async function lookupCache(keys: readonly string[], turn: number): Promise<Map<string, string[]>> {
   const found = new Map<string, string[]>();
   if (keys.length === 0) return found;
   const items = await chrome.storage.local.get<Record<string, unknown>>([...keys]);
-  const now = Date.now();
   const touched: Record<string, Entry> = {};
   for (const [key, entry] of Object.entries(items)) {
     if (!isEntry(entry)) continue;
     found.set(key, entry.s);
-    touched[key] = { s: entry.s, t: now };
+    touched[key] = { s: entry.s, u: turn };
   }
   if (found.size > 0) await chrome.storage.local.set(touched);
   return found;
 }
 
-/** 번역 결과를 넣는다. 저장소 전체가 상한을 넘으면 오래 쓰지 않은 항목부터 지운다. */
+/** 번역 결과를 이번 턴에 쓴 것으로 넣고, 저장소가 정리를 시작할 만큼 찼으면 정리한다. */
 export async function storeCache(
   translations: ReadonlyMap<string, string[]>,
-  limits = { maxBytes: MAX_BYTES, targetBytes: TARGET_BYTES },
+  turn: number,
+  limits: CacheLimits,
 ): Promise<void> {
   if (translations.size === 0) return;
-  const now = Date.now();
-  await chrome.storage.local.set(Object.fromEntries([...translations].map(([key, s]) => [key, { s, t: now }])));
-  if ((await chrome.storage.local.getBytesInUse(null)) > limits.maxBytes) await evict(limits.targetBytes);
+  const entries = [...translations].map(([key, s]) => [key, { s, u: turn } satisfies Entry]);
+  await chrome.storage.local.set(Object.fromEntries(entries));
+  await cleaning(() => cleanUp(turn, limits));
 }
 
 export async function cacheStats(): Promise<{ count: number; bytes: number }> {
@@ -70,24 +113,49 @@ async function cacheKeys(): Promise<string[]> {
   return (await chrome.storage.local.getKeys()).filter((key) => key.startsWith(KEY_PREFIX));
 }
 
-async function evict(targetBytes: number): Promise<void> {
+/**
+ * 저장소가 상한의 cleanupPercent% 이상이면 최근 idleTurns 턴 동안 쓰이지 않은 번역문을 모두 지운다.
+ * 그래도 상한을 넘으면 오래 쓰지 않은 것(턴 기준)부터 targetBytes가 될 때까지 지운다 (SPEC 13장 "캐시 정리").
+ */
+async function cleanUp(turn: number, limits: CacheLimits): Promise<void> {
+  let bytes = await chrome.storage.local.getBytesInUse(null);
+  if (bytes < (limits.maxBytes * limits.cleanupPercent) / 100) return;
   const all = await chrome.storage.local.get<Record<string, unknown>>(null);
   const entries = Object.entries(all)
     .filter((item): item is [string, Entry] => item[0].startsWith(KEY_PREFIX) && isEntry(item[1]))
-    .sort((a, b) => a[1].t - b[1].t);
-  let bytes = await chrome.storage.local.getBytesInUse(null);
+    .map(([key, entry]) => ({ key, used: entry.u ?? 0, bytes: sizeOf(key, entry) }))
+    .sort((a, b) => a.used - b.used);
+
   const remove: string[] = [];
-  for (const [key, entry] of entries) {
-    if (bytes <= targetBytes) break;
-    remove.push(key);
-    bytes -= new TextEncoder().encode(key + JSON.stringify(entry)).length;
+  const recent: typeof entries = [];
+  for (const entry of entries) {
+    if (turn - entry.used >= limits.idleTurns) {
+      remove.push(entry.key);
+      bytes -= entry.bytes;
+    } else {
+      recent.push(entry);
+    }
+  }
+  if (bytes > limits.maxBytes) {
+    for (const entry of recent) {
+      if (bytes <= limits.targetBytes) break;
+      remove.push(entry.key);
+      bytes -= entry.bytes;
+    }
   }
   if (remove.length > 0) await chrome.storage.local.remove(remove);
+}
+
+/** Chrome처럼 "키 + 값의 JSON" 바이트 수로 센다. */
+function sizeOf(key: string, entry: Entry): number {
+  return new TextEncoder().encode(key + JSON.stringify(entry)).length;
 }
 
 function isEntry(value: unknown): value is Entry {
   const entry = value as Partial<Entry> | null;
   return (
-    Array.isArray(entry?.s) && entry.s.every((segment) => typeof segment === "string") && typeof entry.t === "number"
+    Array.isArray(entry?.s) &&
+    entry.s.every((segment) => typeof segment === "string") &&
+    (entry.u === undefined || typeof entry.u === "number")
   );
 }

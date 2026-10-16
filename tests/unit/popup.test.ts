@@ -1,0 +1,165 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installChromeMock } from "./chrome-mock";
+
+// 팝업의 "이 사이트는 항상 번역" (SPEC 4.8, 13장). Chrome의 권한 창은 E2E에서 누를 수 없어 여기서 확인한다.
+
+const POPUP_BODY = new DOMParser().parseFromString(
+  readFileSync(path.resolve(import.meta.dirname, "../../src/popup/popup.html"), "utf8"),
+  "text/html",
+).body.innerHTML;
+
+/** chrome-mock의 탭 주소(https://example.com/docs)의 출처 */
+const ORIGIN = "https://example.com";
+
+let chromeMock: ReturnType<typeof installChromeMock>;
+/** 백그라운드가 기억하는 이 사이트의 자동 번역 여부 */
+let autoTranslate: boolean;
+/** 백그라운드가 돌려주는 탭 상태 */
+let tabState: unknown;
+
+beforeEach(() => {
+  // 팝업은 500ms마다 상태를 다시 읽는다. 가짜 타이머로 두어 테스트가 끝나면 그 반복도 멈추게 한다.
+  vi.useFakeTimers();
+  chromeMock = installChromeMock();
+  chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" } };
+  autoTranslate = false;
+  tabState = { status: "idle", progress: { done: 0, total: 0 }, partial: false };
+  chromeMock.runtimeSendMessage.mockImplementation(async (message) => {
+    switch (message.type) {
+      case "get-auto-translate":
+        return autoTranslate;
+      case "set-auto-translate":
+        return (autoTranslate = message.enabled);
+      case "get-tab-state":
+        return tabState;
+      case "get-shortcut":
+        return "⌥T";
+    }
+    return undefined;
+  });
+  document.body.innerHTML = POPUP_BODY;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+async function openPopup(): Promise<void> {
+  await import("../../src/popup/popup");
+}
+
+const autoRow = () => document.querySelector<HTMLLabelElement>("#auto-row")!;
+const checkbox = () => document.querySelector<HTMLInputElement>("#auto")!;
+const autoMessage = () => document.querySelector<HTMLParagraphElement>("#auto-message")!;
+
+/** 백그라운드에 보낸 메시지 가운데 이 종류 */
+function sent(type: string): unknown[] {
+  return chromeMock.runtimeSendMessage.mock.calls.map(([message]) => message).filter((message) => message.type === type);
+}
+
+describe("팝업: 이 사이트는 항상 번역", () => {
+  it("키가 있는 웹 페이지면 체크박스를 보여 주고, 이미 켠 사이트면 체크된 채로 연다", async () => {
+    autoTranslate = true;
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(autoRow().hidden).toBe(false));
+    expect(checkbox().checked).toBe(true);
+    expect(sent("get-auto-translate")).toEqual([{ type: "get-auto-translate", origin: ORIGIN }]);
+  });
+
+  it("체크하면 백그라운드에 먼저 알리고 같은 클릭 안에서 그 출처의 권한을 요청한다. 허용하면 켜고 지금 탭도 번역한다", async () => {
+    let pendingWhenRequested = 0;
+    chromeMock.requestPermissions.mockImplementation(async () => {
+      pendingWhenRequested = sent("auto-translate-pending").length;
+      return true;
+    });
+    await openPopup();
+    await vi.waitFor(() => expect(autoRow().hidden).toBe(false));
+
+    checkbox().click();
+
+    // 권한 요청은 사용자 동작 안에서 해야 하므로 기다리지 않고 바로 불렸어야 한다.
+    expect(chromeMock.requestPermissions).toHaveBeenCalledWith({ origins: [`${ORIGIN}/*`] });
+    expect(pendingWhenRequested).toBe(1);
+    expect(sent("auto-translate-pending")).toEqual([{ type: "auto-translate-pending", origin: ORIGIN, tabId: 7 }]);
+    await vi.waitFor(() =>
+      expect(sent("set-auto-translate")).toEqual([
+        { type: "set-auto-translate", origin: ORIGIN, enabled: true, tabId: 7 },
+      ]),
+    );
+    expect(checkbox().checked).toBe(true);
+    expect(autoMessage().hidden).toBe(true);
+  });
+
+  it("권한을 거부하면 체크를 풀고 \"권한을 허용해야…\"를 보여 준다", async () => {
+    chromeMock.requestPermissions.mockResolvedValue(false);
+    await openPopup();
+    await vi.waitFor(() => expect(autoRow().hidden).toBe(false));
+
+    checkbox().click();
+
+    await vi.waitFor(() => expect(autoMessage().hidden).toBe(false));
+    expect(autoMessage().textContent).toBe("권한을 허용해야 이 사이트를 자동으로 번역할 수 있습니다.");
+    expect(checkbox().checked).toBe(false);
+    expect(sent("set-auto-translate")).toEqual([{ type: "set-auto-translate", origin: ORIGIN, enabled: false }]);
+  });
+
+  it("체크를 풀면 끈다. 권한은 묻지 않는다", async () => {
+    autoTranslate = true;
+    await openPopup();
+
+    checkbox().click();
+
+    await vi.waitFor(() =>
+      expect(sent("set-auto-translate")).toEqual([{ type: "set-auto-translate", origin: ORIGIN, enabled: false }]),
+    );
+    expect(chromeMock.requestPermissions).not.toHaveBeenCalled();
+    expect(checkbox().checked).toBe(false);
+  });
+
+  it("키가 없으면 체크박스를 보여 주지 않는다", async () => {
+    chromeMock.storage.settings = {};
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("API 키를 먼저 설정하세요"));
+    expect(autoRow().hidden).toBe(true);
+  });
+
+  it("http·https 페이지가 아니면(chrome:// 등) 체크박스를 보여 주지 않는다", async () => {
+    chromeMock.getTab.mockResolvedValue({ id: 7, url: "chrome://extensions/" } as chrome.tabs.Tab);
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(sent("get-tab-state")).not.toEqual([]));
+    expect(autoRow().hidden).toBe(true);
+    expect(sent("get-auto-translate")).toEqual([]);
+  });
+});
+
+describe("팝업: 실패 원인 (SPEC 13장 \"실패 원인 표시\")", () => {
+  it("일부만 실패하면 \"번역 완료\" 아래에 \"일부는…\"과 원인 문구를 두 줄로 보여 준다", async () => {
+    tabState = { status: "translated", progress: { done: 2, total: 2 }, partial: true, cause: "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요." };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("번역 완료"));
+    const detail = document.querySelector<HTMLParagraphElement>("#detail")!;
+    expect(detail.hidden).toBe(false);
+    expect(detail.textContent).toBe("일부는 번역하지 못해 원문으로 두었습니다.\n요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.");
+  });
+
+  it("하나도 번역하지 못했으면 원인 문구와 \"번역\" 버튼(다시 시도)을 보여 준다", async () => {
+    tabState = { status: "error", progress: { done: 2, total: 2 }, error: "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.", partial: false };
+
+    await openPopup();
+
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toBe("요청 한도를 초과했습니다. 잠시 후 다시 시도하세요."));
+    expect(document.querySelector<HTMLButtonElement>("#action")?.textContent).toBe("번역");
+    expect(document.querySelector<HTMLParagraphElement>("#detail")?.hidden).toBe(true);
+  });
+});

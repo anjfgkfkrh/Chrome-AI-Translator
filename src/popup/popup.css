@@ -46,8 +46,28 @@ p {
   color: var(--error);
 }
 
+#detail {
+  white-space: pre-line;
+}
+
 .row {
   margin-bottom: 12px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* display: flex가 hidden 속성을 덮어쓰지 않도록 */
+.check[hidden] {
+  display: none;
+}
+
+#auto-message {
+  color: var(--error);
 }
 
 button {

@@ -1,5 +1,6 @@
 import { sendMessage, type TabAction, type TabState } from "../shared/messages";
 import { renderShortcut } from "../shared/shortcut";
+import { originPattern, pageOrigin } from "../shared/sites";
 import { getSettings } from "../shared/storage";
 
 // 팝업 (SPEC 4.9, 13장 "M4 화면 문구"). 상태는 대상 탭의 콘텐츠 스크립트가 들고 있고, 백그라운드를 거쳐 읽는다.
@@ -12,9 +13,15 @@ const detailText = element<HTMLParagraphElement>("#detail");
 const actionButton = element<HTMLButtonElement>("#action");
 const openSettingsButton = element<HTMLButtonElement>("#open-settings");
 const settingsLink = element<HTMLAnchorElement>("#settings-link");
+const autoRow = element<HTMLLabelElement>("#auto-row");
+const autoCheckbox = element<HTMLInputElement>("#auto");
+const autoMessage = element<HTMLParagraphElement>("#auto-message");
 
 let action: TabAction = "translate";
 const tabId = await targetTabId();
+/** 대상 탭의 출처. http·https 페이지가 아니면 자동 번역 체크박스를 보여 주지 않는다 (SPEC 13장). */
+const origin = tabId === undefined ? undefined : pageOrigin((await chrome.tabs.get(tabId).catch(() => undefined))?.url);
+if (origin !== undefined) autoCheckbox.checked = await sendMessage({ type: "get-auto-translate", origin });
 
 settingsLink.addEventListener("click", (event) => {
   event.preventDefault();
@@ -29,6 +36,29 @@ actionButton.addEventListener("click", async () => {
   } finally {
     actionButton.disabled = false;
   }
+});
+
+// 이 사이트는 항상 번역 (SPEC 4.8, 시나리오 4)
+autoCheckbox.addEventListener("change", () => {
+  if (origin === undefined || tabId === undefined) return;
+  autoMessage.hidden = true;
+  if (!autoCheckbox.checked) {
+    void sendMessage({ type: "set-auto-translate", origin, enabled: false });
+    return;
+  }
+  // 권한 창이 뜰 때 팝업이 닫힐 수 있으므로 먼저 백그라운드에 알려 둔다. 결과는 백그라운드도 받아 처리한다.
+  void sendMessage({ type: "auto-translate-pending", origin, tabId });
+  // 권한 요청은 사용자 동작 안에서 바로 불러야 한다 (await보다 먼저).
+  void chrome.permissions.request({ origins: [originPattern(origin)] }).then(async (granted) => {
+    if (granted) {
+      autoCheckbox.checked = await sendMessage({ type: "set-auto-translate", origin, enabled: true, tabId });
+      return;
+    }
+    autoCheckbox.checked = false;
+    autoMessage.textContent = "권한을 허용해야 이 사이트를 자동으로 번역할 수 있습니다.";
+    autoMessage.hidden = false;
+    void sendMessage({ type: "set-auto-translate", origin, enabled: false });
+  });
 });
 
 void renderShortcut(element("#shortcut"));
@@ -51,6 +81,7 @@ async function poll(): Promise<void> {
 
 async function refresh(): Promise<void> {
   const { apiKeys } = await getSettings();
+  autoRow.hidden = !apiKeys.anthropic || origin === undefined;
   if (!apiKeys.anthropic) return renderNoKey();
   if (tabId === undefined) return render({ status: "unsupported" });
   render(await sendMessage({ type: "get-tab-state", tabId }));
@@ -73,7 +104,8 @@ function render(state: TabState): void {
       return show(`번역 중… ${state.progress.done}/${state.progress.total}`, "muted", "show-original");
     case "translated":
       if (state.partial) {
-        detailText.textContent = "일부는 번역하지 못해 원문으로 두었습니다.";
+        // 원인 문구를 다음 줄에 붙인다 (SPEC 13장 "실패 원인 표시").
+        detailText.textContent = ["일부는 번역하지 못해 원문으로 두었습니다.", state.cause].filter(Boolean).join("\n");
         detailText.hidden = false;
       }
       return show("번역 완료", "success", "show-original");

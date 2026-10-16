@@ -9,6 +9,7 @@ import {
   mockApi,
   mockTranslationApi,
   readStorage,
+  readUsage,
   storeApiKey,
 } from "./sw-helpers";
 
@@ -50,7 +51,7 @@ test.describe("옵션 페이지: 모델 선택 (SPEC 4.10, 7.2)", () => {
     expect(JSON.parse(call!.body).model).toBe("claude-sonnet-5-5");
     expect(await readStorage(serviceWorker)).toEqual({});
 
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("저장했습니다.");
     expect(await readStorage(serviceWorker)).toEqual({
       settings: { apiKeys: { anthropic: "sk-ant-e2e-typed" }, model: "claude-sonnet-5-5" },
@@ -62,12 +63,12 @@ test.describe("옵션 페이지: 모델 선택 (SPEC 4.10, 7.2)", () => {
     const customInput = page.getByLabel("모델 ID");
     await expect(customInput).toBeVisible();
 
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("모델 ID를 입력하세요.");
     expect(await readStorage(serviceWorker)).toEqual({});
 
     await customInput.fill("claude-custom-model");
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("저장했습니다.");
     await page.reload();
     await expect(page.getByLabel("모델", { exact: true })).toHaveValue("custom");
@@ -207,6 +208,11 @@ test.describe("페이지 번역 (테스트용 빌드)", () => {
         ["#signup", "#terms", "#code", "#names", "#start"].map((id) => document.querySelector(id)!.textContent!.trim()),
       );
       console.log(`실제 번역 결과:\n${translated.join("\n")}`);
+
+      // 실제 응답의 usage도 사용량에 더한다 (SPEC 13장 "사용량 표시").
+      await expect.poll(async () => (await readUsage(serviceWorker))?.outputTokens ?? 0).toBeGreaterThan(0);
+      const usage = (await readUsage(serviceWorker))!;
+      expect(usage.inputTokens + usage.cacheWriteTokens + usage.cacheReadTokens).toBeGreaterThan(0);
     });
 
     test("실제 페이지(docs.langchain.com)를 번역한다", async ({ page, serviceWorker }) => {
@@ -232,6 +238,7 @@ test.describe("페이지 번역 (테스트용 빌드)", () => {
       const headings = await page.locator("h1, h2").allInnerTexts();
       console.log(`실제 페이지 제목 일부:\n${headings.slice(0, 8).join("\n")}`);
       console.log(`원문으로 남은 그룹 경고: ${warnings.length === 0 ? "없음" : warnings.join(" / ")}`);
+      console.log(`이번 달 사용량: ${JSON.stringify(await readUsage(serviceWorker))}`);
     });
   });
 });

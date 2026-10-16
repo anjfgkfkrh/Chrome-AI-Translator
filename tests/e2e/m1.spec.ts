@@ -21,7 +21,7 @@ test.describe("옵션 페이지", () => {
   test("API 키를 저장하면 다시 열어도 마스킹된 채로 남아 있다", async ({ page, serviceWorker }) => {
     const input = page.getByLabel("Anthropic API 키");
     await input.fill("  sk-ant-e2e-saved  ");
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("저장했습니다.");
     expect(await readStorage(serviceWorker)).toEqual({ settings: { apiKeys: { anthropic: "sk-ant-e2e-saved" } } });
 
@@ -37,11 +37,11 @@ test.describe("옵션 페이지", () => {
   test("빈 칸으로 저장하면 저장된 키가 지워진다", async ({ page, serviceWorker }) => {
     const input = page.getByLabel("Anthropic API 키");
     await input.fill("sk-ant-e2e-saved");
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("저장했습니다.");
 
     await input.fill("");
-    await page.getByRole("button", { name: "저장" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
     await expect.poll(() => readStorage(serviceWorker)).toEqual({ settings: { apiKeys: {} } });
   });
 

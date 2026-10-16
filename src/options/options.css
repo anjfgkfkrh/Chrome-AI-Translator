@@ -58,18 +58,45 @@ input {
   padding: 0.3rem 0.5rem;
 }
 
-#status {
+textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+}
+
+.hint {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.status {
   min-height: 1.5em;
   margin: 0;
   color: var(--muted);
 }
 
-#status[data-kind="success"] {
+.status[data-kind="success"] {
   color: var(--success);
 }
 
-#status[data-kind="error"] {
+.status[data-kind="error"] {
   color: var(--error);
+}
+
+/* 문장 안에 숫자 입력칸이 들어간다: "캐시가 [80]% 이상 차면 …" */
+.cleanup label {
+  display: inline;
+  margin: 0;
+  font-weight: normal;
+}
+
+.cleanup input {
+  width: 4.5em;
+  flex: none;
 }
 
 .note {

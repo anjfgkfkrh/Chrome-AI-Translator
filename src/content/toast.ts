@@ -30,6 +30,7 @@ const STYLE = `
 .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .title { font-weight: 600; }
 .message { margin: 4px 0 0; }
+.detail { margin: 2px 0 0; }
 button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
 button:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
 .close { font-size: 16px; line-height: 1; }
@@ -47,8 +48,14 @@ export interface ToastHandle {
 
 let current: ToastHandle | undefined;
 
-/** 알림을 띄운다. 이미 떠 있는 알림은 닫는다. onOpenSettings를 주면 "설정 열기"를 붙인다 (키 오류). */
-export function showToast(message: string, options: { onOpenSettings?: () => void } = {}): ToastHandle {
+/**
+ * 알림을 띄운다. 이미 떠 있는 알림은 닫는다. detail은 문구 아래 한 줄(일부 실패의 원인),
+ * onOpenSettings를 주면 "설정 열기"를 붙인다 (키 오류).
+ */
+export function showToast(
+  message: string,
+  options: { detail?: string; onOpenSettings?: () => void } = {},
+): ToastHandle {
   current?.close();
 
   // div 같은 흔한 태그를 고르는 페이지 CSS에 걸리지 않도록 전용 이름을 쓴다.
@@ -67,6 +74,7 @@ export function showToast(message: string, options: { onOpenSettings?: () => voi
   closeButton.setAttribute("aria-label", "닫기");
   header.append(create("span", "title", "AITranslator"), closeButton);
   box.append(header, create("p", "message", message));
+  if (options.detail) box.append(create("p", "detail", options.detail));
   if (options.onOpenSettings) {
     const settingsButton = create("button", "settings", "설정 열기");
     settingsButton.type = "button";

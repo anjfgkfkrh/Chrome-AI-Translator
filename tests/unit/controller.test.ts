@@ -249,3 +249,128 @@ describe("확장 프로그램과 끊긴 콘텐츠 스크립트", () => {
     expect(ports).toHaveLength(1);
   });
 });
+
+describe("사이트별 자동 번역으로 열렸을 때 (SPEC 13장)", () => {
+  const missingKey = { type: "error", message: "API 키를 먼저 설정하세요", needsSettings: true, missingKey: true };
+
+  it("키가 없으면 알림 없이 건너뛴다", async () => {
+    document.body.innerHTML = "<p>Hello</p>";
+    const controller = newController();
+
+    const translating = controller.translate({ auto: true });
+    ports[0]!.receive(missingKey);
+    await translating;
+
+    expect(toastRoot()).toBeUndefined();
+    expect(console.error).not.toHaveBeenCalled();
+    expect(controller.state()).toMatchObject({ status: "error", error: "API 키를 먼저 설정하세요" });
+    expect(document.body.textContent).toBe("Hello");
+  });
+
+  it("자동 번역 사이트라도 직접 번역하면 키가 없다고 알린다", async () => {
+    document.body.innerHTML = "<p>Hello</p>";
+    const controller = newController();
+    const auto = controller.translate({ auto: true });
+    ports[0]!.receive(missingKey);
+    await auto;
+
+    const manual = controller.translate();
+    ports[1]!.receive(missingKey);
+    await manual;
+
+    expect(toastRoot()?.textContent).toContain("API 키를 먼저 설정하세요");
+  });
+
+  it("키 말고 다른 오류는 자동 번역이어도 알린다", async () => {
+    document.body.innerHTML = "<p>Hello</p>";
+    const controller = newController();
+
+    const translating = controller.translate({ auto: true });
+    ports[0]!.receive({ type: "error", message: "API 키를 확인하세요.", needsSettings: true, missingKey: false });
+    await translating;
+
+    expect(toastRoot()?.textContent).toContain("API 키를 확인하세요.");
+  });
+});
+
+describe("실패 원인 표시 (SPEC 13장)", () => {
+  const RATE_LIMITED = "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.";
+
+  it("일부만 실패하면 \"일부는…\" 알림 아래에 원인 문구를 붙이고, 상태에도 원인을 남긴다", async () => {
+    document.body.innerHTML = "<p>One</p><p>Two</p>";
+    const controller = newController();
+
+    const translating = controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested().slice(0, 1)) });
+    ports[0]!.receive({ type: "done", failed: 1, error: RATE_LIMITED });
+    await translating;
+
+    expect(controller.state()).toMatchObject({ status: "translated", partial: true, cause: RATE_LIMITED });
+    expect(toastRoot()?.querySelector(".message")?.textContent).toBe("일부는 번역하지 못해 원문으로 두었습니다.");
+    expect(toastRoot()?.querySelector(".detail")?.textContent).toBe(RATE_LIMITED);
+  });
+
+  it("하나도 번역하지 못하면 원인 문구를 오류로 알린다", async () => {
+    document.body.innerHTML = "<p>One</p><p>Two</p>";
+    const controller = newController();
+
+    const translating = controller.translate();
+    ports[0]!.receive({ type: "done", failed: 2, error: RATE_LIMITED });
+    await translating;
+
+    expect(controller.state()).toMatchObject({ status: "error", error: RATE_LIMITED, partial: false });
+    expect(toastRoot()?.querySelector(".message")?.textContent).toBe(RATE_LIMITED);
+    expect(toastRoot()?.textContent).not.toContain("일부는");
+    expect(toastRoot()?.textContent).not.toContain("설정 열기");
+  });
+
+  it("이미 번역된 페이지에서 새 텍스트만 모두 실패하면 일부 실패로 알린다", async () => {
+    document.body.innerHTML = "<p>First</p>";
+    const controller = newController();
+    const first = controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await first;
+    document.body.insertAdjacentHTML("beforeend", "<p>Added later</p>");
+
+    const second = controller.translate();
+    ports[1]!.receive({ type: "done", failed: 1, error: RATE_LIMITED });
+    await second;
+
+    expect(controller.state()).toMatchObject({ status: "translated", partial: true, cause: RATE_LIMITED });
+    expect(document.body.textContent).toBe("FIRSTAdded later");
+  });
+
+  it("다시 번역하면 지난 원인은 지운다", async () => {
+    document.body.innerHTML = "<p>One</p><p>Two</p>";
+    const controller = newController();
+    const first = controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested().slice(0, 1)) });
+    ports[0]!.receive({ type: "done", failed: 1, error: RATE_LIMITED });
+    await first;
+
+    const second = controller.translate();
+    ports[1]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[1]!.receive({ type: "done", failed: 0 });
+    await second;
+
+    expect(controller.state()).toMatchObject({ status: "translated", partial: false, cause: undefined });
+  });
+});
+
+describe("캐시 정리의 턴 (SPEC 13장)", () => {
+  it("페이지 번역을 시작하는 요청에는 newTurn을, 화면이 바뀌어 더 번역하는 요청에는 붙이지 않는다", async () => {
+    document.body.innerHTML = "<p>First</p>";
+    const controller = newController();
+    void controller.translate();
+    expect(ports[0]!.posted[0]).toMatchObject({ type: "translate", newTurn: true });
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(controller.state().status).toBe("translated"));
+
+    document.body.insertAdjacentHTML("beforeend", "<p>Arrived later</p>");
+
+    await vi.waitFor(() => expect(ports).toHaveLength(2), { timeout: 2_000 });
+    expect(ports[1]!.posted[0]).toMatchObject({ type: "translate", newTurn: false });
+  });
+});

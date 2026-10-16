@@ -14,13 +14,15 @@ import { showToast } from "./toast";
 const KEEPALIVE_MS = 20_000;
 const PARTIAL_FAILURE_MESSAGE = "일부는 번역하지 못해 원문으로 두었습니다.";
 
-/** 번역 전체를 멈춘 오류. needsSettings면 알림에 "설정 열기"를 붙인다. */
+/** 번역 전체를 멈춘 오류. needsSettings면 알림에 "설정 열기"를 붙인다. missingKey는 키가 아예 없을 때다. */
 class TranslationError extends Error {
   readonly needsSettings: boolean;
+  readonly missingKey: boolean;
 
-  constructor(message: string, needsSettings: boolean) {
+  constructor(message: string, needsSettings: boolean, missingKey = false) {
     super(message);
     this.needsSettings = needsSettings;
+    this.missingKey = missingKey;
   }
 }
 
@@ -33,6 +35,12 @@ export class TranslationController {
   private progress = { done: 0, total: 0 };
   private error: string | undefined;
   private partial = false;
+  /** partial일 때 그 원인 문구 */
+  private cause: string | undefined;
+  /** 이 페이지에 번역문이 하나라도 있는지. 없는데 모두 실패하면 일부 실패가 아니라 오류로 알린다 (SPEC 13장). */
+  private hasTranslations = false;
+  /** 사이트별 자동 번역으로 시작했는지 */
+  private automatic = false;
 
   constructor(root: Element) {
     this.page = new PageTranslator(root);
@@ -50,11 +58,15 @@ export class TranslationController {
     else if (this.running > 0) status = "translating";
     else if (this.error !== undefined) status = "error";
     else status = "translated";
-    return { status, progress: { ...this.progress }, error: this.error, partial: this.partial };
+    return { status, progress: { ...this.progress }, error: this.error, partial: this.partial, cause: this.cause };
   }
 
-  /** 번역을 시작하고, 번역 보기인 동안 새로 생기는 텍스트도 번역한다. 진행 상황은 state()로 본다. */
-  translate(): Promise<void> {
+  /**
+   * 번역을 시작하고, 번역 보기인 동안 새로 생기는 텍스트도 번역한다. 진행 상황은 state()로 본다.
+   * auto: 사이트별 자동 번역으로 열린 경우. 키가 없으면 알림 없이 건너뛴다 (SPEC 13장).
+   */
+  translate(options: { auto?: boolean } = {}): Promise<void> {
+    this.automatic = options.auto ?? false;
     this.watcher.start();
     return this.run();
   }
@@ -88,10 +100,13 @@ export class TranslationController {
     if (this.running === 0) {
       this.progress = { done: 0, total: 0 };
       this.partial = false;
+      this.cause = undefined;
     }
     this.running++;
+    // 페이지 번역을 시작할 때만 캐시 정리의 새 턴을 연다. 화면 변화로 더 번역하는 것은 같은 턴이다 (SPEC 13장).
+    const newTurn = changed === undefined;
     return this.page
-      .translate((groups, deliver) => this.request(groups, deliver), changed)
+      .translate((groups, deliver) => this.request(groups, deliver, newTurn), changed)
       .catch((err: unknown) => this.fail(err))
       .finally(() => {
         this.running--;
@@ -99,7 +114,11 @@ export class TranslationController {
   }
 
   /** 백그라운드에 번역을 맡긴다. 페이지 텍스트만 보내고 API 키는 주고받지 않는다 (SPEC 7.1). */
-  private request(groups: RequestGroup[], deliver: (results: SegmentGroup[]) => void): Promise<void> {
+  private request(
+    groups: RequestGroup[],
+    deliver: (results: SegmentGroup[]) => void,
+    newTurn: boolean,
+  ): Promise<void> {
     this.progress.total += groups.length;
     return new Promise((resolve, reject) => {
       const port = chrome.runtime.connect({ name: TRANSLATE_PORT });
@@ -114,20 +133,26 @@ export class TranslationController {
       port.onMessage.addListener((message: BackgroundToContent) => {
         if (message.type === "results") {
           this.progress.done += message.groups.length;
+          if (message.groups.length > 0) this.hasTranslations = true;
           deliver(message.groups);
         } else if (message.type === "done") {
           this.progress.done += message.failed;
+          if (message.failed > 0 && !this.hasTranslations) {
+            // 하나도 번역하지 못했으면 원인 문구를 오류로 알린다 (SPEC 13장 "실패 원인 표시").
+            finish(() => reject(new TranslationError(message.error ?? PARTIAL_FAILURE_MESSAGE, false)));
+            return;
+          }
           if (message.failed > 0) this.reportPartialFailure(message.failed, message.error);
           finish(resolve);
         } else if (message.type === "error") {
-          finish(() => reject(new TranslationError(message.message, message.needsSettings)));
+          finish(() => reject(new TranslationError(message.message, message.needsSettings, message.missingKey)));
         }
       });
       port.onDisconnect.addListener(() => {
         clearInterval(keepAlive);
         reject(new TranslationError("번역 실패: 백그라운드와 연결이 끊어졌습니다.", false));
       });
-      send({ type: "translate", groups });
+      send({ type: "translate", groups, newTurn });
     });
   }
 
@@ -136,15 +161,19 @@ export class TranslationController {
     // 페이지가 바뀔 때마다 같은 오류가 되풀이되지 않도록 감시를 멈춘다. 다시 "번역"하면 이어서 감시한다.
     this.watcher.stop();
     this.error = err instanceof Error ? err.message : String(err);
+    // 자동 번역 사이트를 열 때마다 "키를 설정하세요" 알림이 뜨지 않게 한다. 팝업에서는 미설정으로 보인다.
+    if (this.automatic && err instanceof TranslationError && err.missingKey) return;
     console.error("[AITranslator]", this.error);
     const needsSettings = err instanceof TranslationError && err.needsSettings;
     showToast(this.error, needsSettings ? { onOpenSettings: openSettings } : {});
   }
 
+  /** 일부만 실패하면 원인 문구를 한 줄 덧붙인다 (SPEC 13장 "실패 원인 표시"). */
   private reportPartialFailure(failed: number, cause: string | undefined): void {
     this.partial = true;
+    this.cause = cause;
     console.warn(`[AITranslator] ${failed}개 그룹은 원문으로 두었습니다.`, cause ?? "");
-    showToast(PARTIAL_FAILURE_MESSAGE);
+    showToast(PARTIAL_FAILURE_MESSAGE, { detail: cause });
   }
 }
 

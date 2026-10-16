@@ -23,6 +23,15 @@ describe("showToast (SPEC 4.11, 13장)", () => {
     expect(root.textContent).not.toContain("설정 열기");
   });
 
+  it("detail을 주면 문구 아래에 한 줄 더 쓴다 (일부 실패의 원인)", () => {
+    const { root } = showToast("일부는 번역하지 못해 원문으로 두었습니다.", {
+      detail: "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
+    });
+
+    expect(root.querySelector(".message")?.textContent).toBe("일부는 번역하지 못해 원문으로 두었습니다.");
+    expect(root.querySelector(".detail")?.textContent).toBe("요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.");
+  });
+
   it("페이지 오른쪽 아래에 고정한다", () => {
     showToast("알림");
 
