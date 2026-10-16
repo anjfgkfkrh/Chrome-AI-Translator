@@ -824,3 +824,61 @@ describe("최근 번역 기록 (SPEC 13장 \"기록의 한 건\"·\"기록 항�
     expect(chromeMock.storage).not.toHaveProperty("translationLog");
   });
 });
+
+describe("새로 번역한 것이 없는 건 (SPEC 13장)", () => {
+  const log = (id: string) => ({ id, title: "Docs", url: "https://example.com/docs", automatic: false });
+
+  function translate(id: string, segments: string[][], newTurn: boolean) {
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+    receive({ type: "translate", groups: segments.map((group, i) => ({ id: `${id}-${i}`, segments: group })), newTurn, log: log(id) });
+    return posted;
+  }
+
+  const entries = () => (chromeMock.storage.translationLog as Record<string, any>[] | undefined) ?? [];
+
+  it("모든 문장이 캐시에서 나온 번역은 남기지 않는다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    const first = translate("first", [["Docs"]], true);
+    await vi.waitFor(() => expect(entries().find((e) => e.id === "first")?.status).toBe("done"));
+
+    const second = translate("second", [["Docs"]], true);
+
+    await vi.waitFor(() => expect(second.at(-1)).toMatchObject({ type: "done", failed: 0 }));
+    await vi.waitFor(() => expect(entries().map((e) => e.id)).toEqual(["first"]));
+    expect(first.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  it("번역 중인 건에 캐시에서만 나온 요청이 먼저 끝나도 그 건을 지우지 않는다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    translate("warm", [["Cached"]], true);
+    await vi.waitFor(() => expect(entries().find((e) => e.id === "warm")?.status).toBe("done"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        await gate;
+        return echoUppercase(input, init);
+      }),
+    );
+
+    translate("page", [["New text"]], true);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    const cachedOnly = translate("page", [["Cached"]], false);
+    await vi.waitFor(() => expect(cachedOnly.at(-1)).toMatchObject({ type: "done" }));
+    await vi.waitFor(() => expect(entries().find((e) => e.id === "page")).toMatchObject({ status: "translating", active: 1 }));
+
+    release();
+
+    await vi.waitFor(() =>
+      expect(entries().find((e) => e.id === "page")).toMatchObject({
+        status: "done",
+        active: 0,
+        groups: { total: 2, cached: 1, translated: 1, failed: 0 },
+      }),
+    );
+  });
+});

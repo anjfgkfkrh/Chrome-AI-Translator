@@ -47,20 +47,34 @@ export function beginLog(log: LogInfo, settings: Settings, groups: number): Prom
       groups: { total: groups, cached: 0, translated: 0, failed: 0 },
       usage: { inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 0 },
       requests: 0,
+      active: 1,
     }),
-    (entry) => ({ ...entry, status: "translating", groups: { ...entry.groups, total: entry.groups.total + groups } }),
+    (entry) => ({
+      ...entry,
+      status: "translating",
+      groups: { ...entry.groups, total: entry.groups.total + groups },
+      active: (entry.active ?? 0) + 1,
+    }),
   );
 }
 
-/** 요청이 끝나면 모은 숫자를 더하고 결과를 정한다. 사용자가 기록을 지웠으면 되살리지 않는다. */
+/**
+ * 요청이 끝나면 모은 숫자를 더한다. 그 건의 요청이 모두 끝났을 때 결과를 정하고, 결과가 "완료"인데
+ * 새로 번역한 것이 없으면(모두 캐시에서 나옴) 남기지 않는다 (SPEC 13장 "새로 번역한 것이 없는 건").
+ * 사용자가 기록을 지웠으면 되살리지 않는다.
+ */
 export function finishLog(id: string, stats: RequestStats, end: RequestEnd, elapsedMs: number): Promise<void> {
   return updateLogEntry(id, (entry) => {
+    // 같은 건에 요청이 둘 이상 겹치면(화면 변화로 더 번역) 먼저 끝난 요청으로는 판단하지 않는다.
+    const active = Math.max(0, (entry.active ?? 1) - 1);
     const groups = {
       total: entry.groups.total,
       cached: entry.groups.cached + stats.cached,
       translated: entry.groups.translated + (stats.delivered - stats.cached),
       failed: entry.groups.failed + (end.kind === "aborted" ? 0 : end.failed),
     };
+    const status = active > 0 ? "translating" : statusOf(end, groups);
+    if (status === "done" && groups.translated === 0) return undefined;
     return {
       ...entry,
       finishedAt: Date.now(),
@@ -73,8 +87,9 @@ export function finishLog(id: string, stats: RequestStats, end: RequestEnd, elap
         outputTokens: entry.usage.outputTokens + stats.usage.outputTokens,
       },
       requests: entry.requests + stats.requests,
-      status: statusOf(end, groups),
+      status,
       cause: end.kind === "aborted" ? entry.cause : (end.cause ?? entry.cause),
+      active,
     };
   });
 }

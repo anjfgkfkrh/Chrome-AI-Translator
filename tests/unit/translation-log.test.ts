@@ -70,6 +70,15 @@ describe("최근 번역 기록 저장 (SPEC 13장 \"최근 번역 기록\")", ()
     expect(chromeMock.storage).not.toHaveProperty("translationLog");
   });
 
+  it("고칠 때 undefined를 돌려주면 그 기록을 지운다", async () => {
+    await upsertLogEntry("a", () => entry("a"), keepAsIs);
+    await upsertLogEntry("b", () => entry("b"), keepAsIs);
+
+    await updateLogEntry("a", () => undefined);
+
+    expect((await getTranslationLog()).map((item) => item.id)).toEqual(["b"]);
+  });
+
   it("동시에 여러 요청이 고쳐도 잃지 않는다", async () => {
     await upsertLogEntry("a", () => entry("a", { requests: 0 }), keepAsIs);
 

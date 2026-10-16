@@ -34,6 +34,8 @@ export interface TranslationLogEntry {
   usage: TokenUsage;
   /** API 요청 횟수 (다시 보낸 것 포함) */
   requests: number;
+  /** 진행 중인 요청 수. 0이 되었을 때 결과를 정하고 남길지 판단한다 (이전 기록에는 없음) */
+  active?: number;
 }
 
 export async function getTranslationLog(): Promise<TranslationLogEntry[]> {
@@ -62,13 +64,21 @@ export function upsertLogEntry(
   });
 }
 
-/** 그 ID의 기록이 있을 때만 고친다 (번역 중에 "기록 지우기"를 눌렀으면 되살리지 않는다). */
-export function updateLogEntry(id: string, update: (entry: TranslationLogEntry) => TranslationLogEntry): Promise<void> {
+/**
+ * 그 ID의 기록이 있을 때만 고친다 (번역 중에 "기록 지우기"를 눌렀으면 되살리지 않는다).
+ * update가 undefined를 돌려주면 그 기록을 지운다 (새로 번역한 것이 없는 건, SPEC 13장).
+ */
+export function updateLogEntry(
+  id: string,
+  update: (entry: TranslationLogEntry) => TranslationLogEntry | undefined,
+): Promise<void> {
   return oneAtATime(async () => {
     const log = await getTranslationLog();
     const existing = log.find((entry) => entry.id === id);
     if (!existing) return;
-    await chrome.storage.local.set({ [TRANSLATION_LOG_KEY]: [update(existing), ...log.filter((item) => item !== existing)] });
+    const updated = update(existing);
+    const rest = log.filter((item) => item !== existing);
+    await chrome.storage.local.set({ [TRANSLATION_LOG_KEY]: updated ? [updated, ...rest] : rest });
   });
 }
 

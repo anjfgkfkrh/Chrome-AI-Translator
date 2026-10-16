@@ -36,15 +36,18 @@ test("최근 번역: 번역하면 열어 둔 옵션 페이지에 한 건이 생�
   await expect(summaries).toHaveCount(1);
   await expect(summaries.first()).toContainText("Fixture: sentences · Haiku5.5-medium(기본) · 완료 · 5개 (캐시 0)");
 
-  // 다시 열면 캐시로 번역한다: 새 건이 위에 생긴다.
+  // 다시 열면 모두 캐시로 번역한다: 새로 번역한 것이 없으므로 기록을 남기지 않는다 (SPEC 13장).
   await page.reload();
   await injectContentScript(serviceWorker, SENTENCES);
   await expect(page.locator("#start")).toHaveText("GET STARTED");
-  await expect(summaries).toHaveCount(2);
-  await expect(summaries.first()).toContainText("5개 (캐시 5)");
+  await expect.poll(async () => (await readStorage(serviceWorker)).cacheTurn).toBe(2);
+  await expect
+    .poll(async () => ((await readStorage(serviceWorker)).translationLog as { status: string }[]).map((e) => e.status))
+    .toEqual(["done"]);
+  await expect(summaries).toHaveCount(1);
 
-  await summaries.nth(1).click();
-  const details = options.locator(".log-entry").nth(1).locator("dl");
+  await summaries.first().click();
+  const details = options.locator(".log-entry").first().locator("dl");
   await expect(details).toContainText("Fixture: sentences (http://aitranslator.test/sentences.html)");
   await expect(details).toContainText("claude-haiku-5-5");
   await expect(details).toContainText("전체 5 · 캐시 0 · 새로 번역 5 · 원문으로 남김 0");
