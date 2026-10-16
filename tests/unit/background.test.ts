@@ -712,3 +712,115 @@ describe("이 품질로 다시 번역 (SPEC 13장)", () => {
     expect(chromeMock.executeScript).not.toHaveBeenCalled();
   });
 });
+
+describe("최근 번역 기록 (SPEC 13장 \"기록의 한 건\"·\"기록 항목\")", () => {
+  const log = (id: string) => ({ id, title: "Docs", url: "https://example.com/docs", automatic: false });
+
+  async function translate(id: string, segments: string[][], newTurn: boolean) {
+    const { port, posted, receive, close } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+    receive({
+      type: "translate",
+      groups: segments.map((group, i) => ({ id: `g${i}`, segments: group })),
+      newTurn,
+      log: log(id),
+    });
+    return { posted, close };
+  }
+
+  /** 그 건이 생기고 요청이 끝날 때까지 기다린다. */
+  async function finished(id: string): Promise<Record<string, any>> {
+    const find = () => (chromeMock.storage.translationLog as Record<string, any>[] | undefined)?.find((e) => e.id === id);
+    await vi.waitFor(() => {
+      expect(find()).toBeDefined();
+      expect(find()!.status).not.toBe("translating");
+    });
+    return find()!;
+  }
+
+  it("한 건에 모델·품질·문자열 수(캐시·새로 번역)·토큰·요청 횟수를 남긴다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    await translate("first", [["Docs"]], true);
+    await finished("first");
+
+    await translate("second", [["Docs"], ["Pricing"]], true);
+    const entry = await finished("second");
+
+    expect(entry).toMatchObject({
+      page: { title: "Docs", url: "https://example.com/docs" },
+      provider: "Anthropic",
+      model: "claude-haiku-5-5",
+      tier: "Haiku5.5-medium(기본)",
+      translationMode: "accurate",
+      automatic: false,
+      status: "done",
+      groups: { total: 2, cached: 1, translated: 1, failed: 0 },
+      usage: { inputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 50 },
+      requests: 1,
+    });
+    expect(entry.durationMs).toBeGreaterThanOrEqual(0);
+    expect((chromeMock.storage.translationLog as { id: string }[]).map((e) => e.id)).toEqual(["second", "first"]);
+  });
+
+  it("화면 변화로 더 번역한 요청은 같은 건에 더한다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    await translate("page", [["One"]], true);
+    await finished("page");
+
+    await translate("page", [["Two"], ["Three"]], false);
+    await vi.waitFor(async () => expect((await finished("page")).groups.total).toBe(3));
+    const entry = await finished("page");
+
+    expect(entry).toMatchObject({ groups: { total: 3, cached: 0, translated: 3, failed: 0 }, requests: 2 });
+    expect(chromeMock.storage.translationLog).toHaveLength(1);
+  });
+
+  it("번역 전체를 멈춘 오류는 원인과 함께 \"오류\"로, 탭이 닫혀 멈춘 번역은 \"중단\"으로 남긴다", async () => {
+    saveKey();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response('{"error":{"message":"invalid x-api-key"}}', { status: 401 })),
+    );
+    await translate("bad-key", [["Hello"]], true);
+    expect(await finished("bad-key")).toMatchObject({
+      status: "error",
+      cause: "API 키를 확인하세요.",
+      groups: { total: 1, failed: 1 },
+      requests: 1,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        (_input, init) => new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))),
+      ),
+    );
+    const { close } = await translate("closed", [["Hello"]], true);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    close();
+    expect(await finished("closed")).toMatchObject({ status: "aborted", requests: 1 });
+  });
+
+  it("\"기록 지우기\"는 백그라운드가 지운다", async () => {
+    chromeMock.storage.translationLog = [{ id: "x" }];
+
+    await ask({ type: "clear-translation-log" }, optionsPage);
+
+    expect(chromeMock.storage).not.toHaveProperty("translationLog");
+  });
+
+  it("기록 정보가 없는 요청(이전 번역 스크립트)은 기록하지 않는다", async () => {
+    saveKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(echoUppercase));
+    const { port, posted, receive } = createPort(contentScript);
+    chromeMock.onConnect[0]!(port);
+
+    receive({ type: "translate", groups: [{ id: "g1", segments: ["Hi"] }], newTurn: true });
+
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: "done" }));
+    expect(chromeMock.storage).not.toHaveProperty("translationLog");
+  });
+});

@@ -3,6 +3,7 @@ import {
   type BackgroundToContent,
   type ContentCommand,
   type ContentToBackground,
+  type LogInfo,
   type Message,
   type PageState,
   type RequestGroup,
@@ -14,6 +15,7 @@ import { isProviderId, providerInfo, type ProviderId } from "../shared/models";
 import { openRouterModelIds } from "../shared/openrouter-models";
 import { originPattern } from "../shared/sites";
 import { activeApiKey, getSettings } from "../shared/storage";
+import { clearTranslationLog } from "../shared/translation-log";
 import { recordUsage, type TokenUsage } from "../shared/usage";
 import {
   disableAutoTranslate,
@@ -27,6 +29,7 @@ import {
 } from "./auto-translate";
 import { cacheLimits, cacheStats, cleanUpCache, clearCache, currentTurn, startTurn } from "./cache";
 import { errorMessage, isKeyError, NO_API_KEY_MESSAGE } from "./errors";
+import { beginLog, finishLog, logInfoOf, RequestStats, type RequestEnd } from "./log-recorder";
 import { AnthropicProvider } from "./providers/anthropic";
 import { OpenRouterProvider } from "./providers/openrouter";
 import type { TranslationProvider } from "./providers/types";
@@ -129,6 +132,8 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
       return respond(cacheStats());
     case "clear-cache":
       return respond(clearCache());
+    case "clear-translation-log":
+      return respond(clearTranslationLog());
     case "clean-cache":
       return respond(cleanCacheNow());
     case "get-auto-translate":
@@ -263,7 +268,7 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => controller.abort());
   port.onMessage.addListener((message: ContentToBackground) => {
     if (message?.type === "translate" && Array.isArray(message.groups)) {
-      void handleTranslate(port, message.groups, message.newTurn === true, controller.signal);
+      void handleTranslate(port, message.groups, message.newTurn === true, logInfoOf(message.log), controller.signal);
     }
   });
 });
@@ -272,6 +277,7 @@ async function handleTranslate(
   port: chrome.runtime.Port,
   groups: RequestGroup[],
   newTurn: boolean,
+  log: LogInfo | undefined,
   signal: AbortSignal,
 ): Promise<void> {
   const post = (message: BackgroundToContent) => {
@@ -289,6 +295,11 @@ async function handleTranslate(
     console.warn("[AITranslator] 캐시 턴을 읽지 못했습니다.", err);
     return 0;
   });
+  // 최근 번역 기록 (SPEC 13장 "최근 번역 기록"): 기록하지 못해도 번역은 계속한다.
+  const started = Date.now();
+  const stats = new RequestStats();
+  if (log) await beginLog(log, settings, groups.length).catch(warnLog);
+  let end: RequestEnd;
   try {
     const summary = await translateGroups({
       provider: providers[settings.provider],
@@ -297,25 +308,36 @@ async function handleTranslate(
       groups,
       turn,
       signal,
-      onResults: (results) => post({ type: "results", groups: results }),
-      onUsage: saveUsage,
+      onResults: (results) => {
+        stats.delivered += results.length;
+        post({ type: "results", groups: results });
+      },
+      onUsage: (usage) => {
+        stats.addUsage(usage);
+        saveUsage(usage);
+      },
+      onCacheHits: (count) => (stats.cached += count),
+      onRequest: () => stats.requests++,
     });
-    post({
-      type: "done",
-      failed: summary.failed,
-      error:
-        summary.lastError === undefined
-          ? undefined
-          : errorMessage(summary.lastError, settings.model, "translation", providerName),
-    });
+    const cause =
+      summary.lastError === undefined
+        ? undefined
+        : errorMessage(summary.lastError, settings.model, "translation", providerName);
+    post({ type: "done", failed: summary.failed, error: cause });
+    end = { kind: "done", failed: summary.failed, cause };
   } catch (err) {
-    if (signal.aborted) return;
-    console.error("[AITranslator] 번역을 멈췄습니다.", err instanceof Error ? err.message : err);
-    post({
-      type: "error",
-      message: errorMessage(err, settings.model, "translation", providerName),
-      needsSettings: isKeyError(err),
-      missingKey: false,
-    });
+    if (signal.aborted) {
+      end = { kind: "aborted" };
+    } else {
+      console.error("[AITranslator] 번역을 멈췄습니다.", err instanceof Error ? err.message : err);
+      const message = errorMessage(err, settings.model, "translation", providerName);
+      post({ type: "error", message, needsSettings: isKeyError(err), missingKey: false });
+      end = { kind: "error", failed: groups.length - stats.delivered, cause: message };
+    }
   }
+  if (log) await finishLog(log.id, stats, end, Date.now() - started).catch(warnLog);
+}
+
+function warnLog(err: unknown): void {
+  console.warn("[AITranslator] 번역 기록을 저장하지 못했습니다.", err);
 }

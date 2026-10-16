@@ -411,3 +411,86 @@ describe("이 품질로 다시 번역 (SPEC 13장)", () => {
     expect(ports).toHaveLength(1);
   });
 });
+
+describe("최근 번역 기록 정보 (SPEC 13장 \"기록의 한 건\")", () => {
+  function logOf(port: number) {
+    return ports[port]!.posted.find((message) => message.type === "translate").log;
+  }
+
+  it("페이지 번역마다 새 ID, 화면 변화로 더 번역하면 같은 ID. 주소의 쿼리·해시는 뺀다", async () => {
+    history.replaceState(null, "", "/docs/page?token=secret#part");
+    document.title = "  Docs Page  ";
+    document.body.innerHTML = "<p>First</p>";
+    const controller = newController();
+    void controller.translate();
+    const first = logOf(0);
+    expect(first).toMatchObject({ title: "Docs Page", url: `${location.origin}/docs/page`, automatic: false });
+    expect(first.id).toMatch(/^[0-9a-z]+-[0-9a-z]+$/);
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(controller.state().status).toBe("translated"));
+
+    document.body.insertAdjacentHTML("beforeend", "<p>Arrived later</p>");
+    await vi.waitFor(() => expect(ports).toHaveLength(2), { timeout: 2_000 });
+    expect(logOf(1).id).toBe(first.id);
+
+    ports[1]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[1]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(controller.state().status).toBe("translated"));
+    await controller.retranslate();
+    expect(logOf(2).id).not.toBe(first.id);
+    history.replaceState(null, "", "/");
+  });
+
+  it("자동 번역으로 열렸으면 그렇게 남긴다", () => {
+    document.body.innerHTML = "<p>Hello</p>";
+    void newController().translate({ auto: true });
+
+    expect(logOf(0)).toMatchObject({ automatic: true });
+  });
+});
+
+describe("페이지를 새로 읽지 않는 사이트의 페이지 이동 (SPEC 13장)", () => {
+  function translateMessage(port: number) {
+    return ports[port]!.posted.find((message) => message.type === "translate");
+  }
+
+  async function translatedFirst(controller: TranslationController): Promise<void> {
+    void controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await vi.waitFor(() => expect(controller.state().status).toBe("translated"));
+  }
+
+  it("주소가 바뀐 뒤 화면이 바뀌어 더 번역하면 새 건이자 새 턴으로 보낸다", async () => {
+    history.replaceState(null, "", "/app");
+    document.body.innerHTML = "<p>Home</p>";
+    const controller = newController();
+    await translatedFirst(controller);
+
+    history.pushState(null, "", "/app/settings");
+    document.body.insertAdjacentHTML("beforeend", "<p>Settings screen</p>");
+
+    await vi.waitFor(() => expect(ports).toHaveLength(2), { timeout: 2_000 });
+    const next = translateMessage(1);
+    expect(next.newTurn).toBe(true);
+    expect(next.log.id).not.toBe(translateMessage(0).log.id);
+    expect(next.log.url).toBe(`${location.origin}/app/settings`);
+    history.replaceState(null, "", "/");
+  });
+
+  it("쿼리·해시만 바뀌면 같은 건·같은 턴이다", async () => {
+    history.replaceState(null, "", "/search");
+    document.body.innerHTML = "<p>Results</p>";
+    const controller = newController();
+    await translatedFirst(controller);
+
+    history.pushState(null, "", "/search?q=agents#top");
+    document.body.insertAdjacentHTML("beforeend", "<p>More results</p>");
+
+    await vi.waitFor(() => expect(ports).toHaveLength(2), { timeout: 2_000 });
+    expect(translateMessage(1).newTurn).toBe(false);
+    expect(translateMessage(1).log.id).toBe(translateMessage(0).log.id);
+    history.replaceState(null, "", "/");
+  });
+});

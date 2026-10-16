@@ -2,6 +2,7 @@ import {
   TRANSLATE_PORT,
   type BackgroundToContent,
   type ContentToBackground,
+  type LogInfo,
   type PageState,
   type RequestGroup,
   type SegmentGroup,
@@ -41,6 +42,10 @@ export class TranslationController {
   private hasTranslations = false;
   /** 사이트별 자동 번역으로 시작했는지 */
   private automatic = false;
+  /** 최근 번역 기록의 한 건 ID. 페이지 번역을 시작할 때마다 새로 정한다 (SPEC 13장 "기록의 한 건"). */
+  private logId = "";
+  /** 그 건을 시작한 주소 (쿼리·해시 뺌) */
+  private logUrl = "";
 
   constructor(root: Element) {
     this.page = new PageTranslator(root);
@@ -115,8 +120,13 @@ export class TranslationController {
       this.cause = undefined;
     }
     this.running++;
-    // 페이지 번역을 시작할 때만 캐시 정리의 새 턴을 연다. 화면 변화로 더 번역하는 것은 같은 턴이다 (SPEC 13장).
-    const newTurn = changed === undefined;
+    // 페이지 번역을 시작할 때만 캐시 정리의 새 턴과 기록의 새 건을 연다. 화면 변화로 더 번역하는 것은 같은 턴·같은 건이다.
+    // 다만 주소가 바뀌었으면 페이지를 새로 읽지 않는 사이트(SPA)의 페이지 이동이므로 새로 연다 (SPEC 13장).
+    const newTurn = changed === undefined || pageUrl() !== this.logUrl;
+    if (newTurn) {
+      this.logId = newLogId();
+      this.logUrl = pageUrl();
+    }
     return this.page
       .translate((groups, deliver) => this.request(groups, deliver, newTurn), changed)
       .catch((err: unknown) => this.fail(err))
@@ -164,8 +174,18 @@ export class TranslationController {
         clearInterval(keepAlive);
         reject(new TranslationError("번역 실패: 백그라운드와 연결이 끊어졌습니다.", false));
       });
-      send({ type: "translate", groups, newTurn });
+      send({ type: "translate", groups, newTurn, log: this.logInfo() });
     });
+  }
+
+  /** 기록에 남길 페이지 정보. 주소의 쿼리·해시는 뺀다 (SPEC 13장 "기록 항목"). */
+  private logInfo(): LogInfo {
+    return {
+      id: this.logId,
+      title: document.title.trim().slice(0, 200),
+      url: pageUrl(),
+      automatic: this.automatic,
+    };
   }
 
   /** 시나리오 5: 원인과 해결 방법을 알리고, 이미 번역된 부분은 그대로 둔다. */
@@ -187,6 +207,16 @@ export class TranslationController {
     console.warn(`[AITranslator] ${failed}개 그룹은 원문으로 두었습니다.`, cause ?? "");
     showToast(PARTIAL_FAILURE_MESSAGE, { detail: cause });
   }
+}
+
+/** 기록에 남기고 페이지 이동을 가늠하는 주소: 쿼리·해시는 뺀다 (SPEC 13장 "기록 항목") */
+function pageUrl(): string {
+  return location.href.split(/[?#]/)[0]!;
+}
+
+/** http 페이지에서는 crypto.randomUUID를 쓸 수 없으므로 시각과 난수로 만든다. */
+function newLogId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function openSettings(): void {

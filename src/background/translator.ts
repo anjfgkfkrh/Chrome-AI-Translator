@@ -31,6 +31,10 @@ export interface TranslationJob {
   onResults(groups: SegmentGroup[]): void;
   /** API 응답이 올 때마다 그 사용량을 넘긴다 (재요청한 것, 쓸 수 없던 응답 포함). */
   onUsage?(usage: TokenUsage): void;
+  /** 캐시에서 꺼낸 그룹 수 (최근 번역 기록용, SPEC 13장) */
+  onCacheHits?(count: number): void;
+  /** API 요청을 보낼 때마다 (다시 보낸 것 포함) */
+  onRequest?(): void;
 }
 
 export interface TranslationSummary {
@@ -107,6 +111,7 @@ async function useCache(
       keyById.set(group.id, keys[i]!);
     }
   });
+  job.onCacheHits?.(hits.length);
   if (hits.length > 0) job.onResults(hits);
   return { misses, keyById };
 }
@@ -198,6 +203,7 @@ async function requestWithRetry(job: TranslationJob, groups: RequestGroup[], sig
   let networkRetries = 0;
   for (;;) {
     try {
+      job.onRequest?.();
       return await job.provider.translate(
         { targetLanguage: "ko", glossary: job.settings.glossary, groups },
         {

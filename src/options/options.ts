@@ -26,6 +26,7 @@ import {
   setQualityTier,
   setTranslationOptions,
 } from "../shared/storage";
+import { getTranslationLog, logDetails, logSummary, TRANSLATION_LOG_KEY } from "../shared/translation-log";
 import { getUsage, isEmptyUsage, USAGE_KEY } from "../shared/usage";
 
 const CUSTOM_MODEL = "custom";
@@ -57,6 +58,9 @@ const cacheMaxInput = element<HTMLInputElement>("#cache-max");
 const cleanupPercentInput = element<HTMLInputElement>("#cleanup-percent");
 const idleTurnsInput = element<HTMLInputElement>("#idle-turns");
 const usageText = element<HTMLParagraphElement>("#usage");
+const logList = element<HTMLDivElement>("#log");
+const logEmpty = element<HTMLParagraphElement>("#log-empty");
+const clearLogButton = element<HTMLButtonElement>("#clear-log");
 
 for (const provider of PROVIDERS) providerSelect.add(new Option(provider.name, provider.id));
 for (const tier of QUALITY_TIERS) qualitySelect.add(new Option(qualityTierText(tier), tier.id));
@@ -75,12 +79,49 @@ void loadSettings();
 void renderAutoSites();
 void renderCacheSummary();
 void renderUsage();
+void renderLog();
 void renderShortcut(element("#shortcut"));
 
-// 열어 둔 동안 번역해도 사용량이 바로 바뀐다 (SPEC 13장 "사용량 갱신").
+// 열어 둔 동안 번역해도 사용량과 최근 번역이 바로 바뀐다 (SPEC 13장 "사용량 갱신"·"최근 번역 기록").
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && USAGE_KEY in changes) void renderUsage();
+  if (area !== "local") return;
+  if (USAGE_KEY in changes) void renderUsage();
+  if (TRANSLATION_LOG_KEY in changes) void renderLog();
 });
+
+clearLogButton.addEventListener("click", async () => {
+  await sendMessage({ type: "clear-translation-log" });
+  await renderLog();
+});
+
+// 최근 번역 (SPEC 13장 "기록 보여 주기"): 최근 것이 위. 페이지 제목은 페이지에서 온 글이라 글로만 넣는다.
+async function renderLog(): Promise<void> {
+  const log = await getTranslationLog();
+  // 다시 그려도 펼쳐 둔 기록은 펼친 채로 둔다.
+  const opened = new Set([...logList.querySelectorAll<HTMLDetailsElement>("details[open]")].map((item) => item.dataset.id));
+  logEmpty.hidden = log.length > 0;
+  clearLogButton.disabled = log.length === 0;
+  logList.replaceChildren(
+    ...log.map((entry) => {
+      const details = document.createElement("details");
+      details.className = "log-entry";
+      details.dataset.id = entry.id;
+      details.open = opened.has(entry.id);
+      const summary = document.createElement("summary");
+      summary.textContent = logSummary(entry);
+      const list = document.createElement("dl");
+      for (const [name, value] of logDetails(entry)) {
+        const term = document.createElement("dt");
+        term.textContent = name;
+        const description = document.createElement("dd");
+        description.textContent = value;
+        list.append(term, description);
+      }
+      details.append(summary, list);
+      return details;
+    }),
+  );
+}
 
 toggleButton.addEventListener("click", () => {
   const show = keyInput.type === "password";

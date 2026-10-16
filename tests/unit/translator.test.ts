@@ -559,3 +559,36 @@ describe("빠르게의 형식 오류 재요청 (SPEC 13장)", () => {
     expect(bySegments.WORLD).toMatchObject({ f: 1 });
   });
 });
+
+describe("최근 번역 기록용 숫자 (SPEC 13장)", () => {
+  it("캐시에서 꺼낸 그룹 수와, 다시 보낸 것을 포함한 API 요청 횟수를 알린다", async () => {
+    stubFetchSequence(
+      () => messageResponse("not json"),
+      () => translationResponse([{ id: "g2", segments: ["둘"] }]),
+    );
+    // g1은 캐시에 넣어 둔다.
+    stubFetch(echoUppercase);
+    await run([group("g1", "One")]).promise;
+    stubFetchSequence(
+      () => messageResponse("not json"),
+      () => translationResponse([{ id: "g2", segments: ["둘"] }]),
+    );
+    const hits: number[] = [];
+    let requests = 0;
+
+    await translateGroups({
+      provider: new AnthropicProvider(),
+      apiKey: "sk-ant-test",
+      settings: defaultSettings(),
+      groups: [group("g1", "One"), group("g2", "Two")],
+      turn: 2,
+      signal: new AbortController().signal,
+      onResults: () => {},
+      onCacheHits: (count) => hits.push(count),
+      onRequest: () => requests++,
+    });
+
+    expect(hits).toEqual([1]);
+    expect(requests).toBe(2);
+  });
+});

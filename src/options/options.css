@@ -109,6 +109,29 @@ summary {
   font-weight: 600;
 }
 
+/* 최근 번역: 한 건에 요약 한 줄, 펼치면 자세히 */
+.log-entry summary {
+  margin-bottom: 0.25rem;
+  font-weight: normal;
+}
+
+.log-entry dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0.25rem 0 0.75rem 1rem;
+  font-size: 0.875rem;
+}
+
+.log-entry dt {
+  color: var(--muted);
+}
+
+.log-entry dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .note {
   margin-top: 1.5rem;
   color: var(--muted);

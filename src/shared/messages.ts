@@ -55,6 +55,8 @@ export type Message =
   | { type: "get-openrouter-models" }
   | { type: "get-cache-stats" }
   | { type: "clear-cache" }
+  // 옵션 페이지의 "기록 지우기" (백그라운드가 기록을 쓰는 순서와 섞이지 않게 백그라운드가 지운다)
+  | { type: "clear-translation-log" }
   // 캐시 상한·정리 기준을 바꾼 뒤 바로 정리한다
   | { type: "clean-cache" }
   // 사이트별 자동 번역 (SPEC 4.8): 팝업의 체크박스, 옵션 페이지의 삭제
@@ -81,6 +83,7 @@ interface Responses {
   "get-openrouter-models": string[];
   "get-cache-stats": { count: number; bytes: number };
   "clear-cache": void;
+  "clear-translation-log": void;
   "clean-cache": void;
   /** 목록에 있고 권한도 있으면 true */
   "get-auto-translate": boolean;
@@ -103,13 +106,22 @@ export type ContentCommand =
   | { type: "show-original" }
   | { type: "retranslate" };
 
+/** 최근 번역 기록에 남길 페이지 정보. 같은 페이지 번역의 요청은 같은 id를 쓴다. */
+export interface LogInfo {
+  id: string;
+  title: string;
+  /** origin + pathname (쿼리·해시는 뺀다) */
+  url: string;
+  automatic: boolean;
+}
+
 /** 콘텐츠 스크립트 ↔ 백그라운드 번역 포트. 포트가 끊기면(탭 닫힘·페이지 이동) 진행 중인 요청을 취소한다. */
 export const TRANSLATE_PORT = "translate";
 
 export type ContentToBackground =
   // newTurn: 페이지 번역을 시작하는 요청이면 true, 번역 보기 중 화면이 바뀌어 더 번역하는 요청이면 false.
-  // 캐시 정리의 턴을 센다 (SPEC 13장 "캐시 정리: 턴").
-  | { type: "translate"; groups: RequestGroup[]; newTurn: boolean }
+  // 캐시 정리의 턴을 센다 (SPEC 13장 "캐시 정리: 턴"). log: 최근 번역 기록의 한 건 (SPEC 13장 "기록의 한 건")
+  | { type: "translate"; groups: RequestGroup[]; newTurn: boolean; log: LogInfo }
   // 번역을 기다리는 동안 서비스 워커가 멈추지 않게 보낸다.
   | { type: "ping" };
 
