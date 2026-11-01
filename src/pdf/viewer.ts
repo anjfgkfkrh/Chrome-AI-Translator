@@ -1,5 +1,5 @@
 import { pdfjsLib } from "./pdfjs";
-import { EventBus, LinkTarget, PDFLinkService, PDFViewer } from "pdfjs-dist/web/pdf_viewer.mjs";
+import { EventBus, LinkTarget, PDFLinkService, PDFViewer, SpreadMode } from "pdfjs-dist/web/pdf_viewer.mjs";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import { listenForCommands, type CommandTarget } from "../content/commands";
@@ -33,6 +33,7 @@ const pageInput = element<HTMLInputElement>("#page-input");
 const pageTotal = element<HTMLSpanElement>("#page-total");
 const zoomInput = element<HTMLInputElement>("#zoom-input");
 const fitButton = element<HTMLButtonElement>("#fit");
+const twoPageButton = element<HTMLButtonElement>("#two-page");
 const menuButton = element<HTMLButtonElement>("#menu");
 const sidebar = element<HTMLElement>("#sidebar");
 const statusText = element<HTMLSpanElement>("#status");
@@ -96,6 +97,11 @@ element("#rotate").addEventListener("click", () => {
 fitButton.addEventListener("click", () => {
   viewer.currentScaleValue = viewer.currentScaleValue === "page-fit" ? "page-width" : "page-fit";
   renderZoom();
+});
+twoPageButton.addEventListener("click", () => {
+  viewer.spreadMode = viewer.spreadMode === SpreadMode.NONE ? SpreadMode.ODD : SpreadMode.NONE;
+  twoPageButton.toggleAttribute("data-active", viewer.spreadMode === SpreadMode.ODD);
+  requestAnimationFrame(() => overlay.place());
 });
 menuButton.addEventListener("click", () => {
   sidebar.hidden = !sidebar.hidden;

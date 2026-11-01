@@ -39,7 +39,7 @@ button.icon {
 button.icon:hover { background: rgba(255, 255, 255, 0.08); }
 button.icon:focus-visible, #toggle:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 1px; }
 button.icon svg { width: 20px; height: 20px; fill: currentColor; }
-#fit[data-active] { color: #8ab4f8; }
+#fit[data-active], #two-page[data-active] { color: #8ab4f8; }
 
 #toolbar input {
   box-sizing: border-box; height: 24px; padding: 0 4px; border: 0; border-radius: 2px;

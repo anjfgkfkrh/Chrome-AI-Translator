@@ -155,6 +155,41 @@ test.describe("번역", () => {
     expect(saved.equals(paragraphPages(6))).toBe(true);
   });
 
+  test("두 쪽 보기: 1쪽과 2쪽이 나란히 놓이고 번역층이 각 쪽에 맞으며, 끄면 세로로 돌아간다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+    const boxOf = async (selector: string) => (await page.locator(selector).boundingBox())!;
+    const innerOf = (selector: string) =>
+      page.locator(selector).evaluate((div) => {
+        const rect = div.getBoundingClientRect();
+        return { x: rect.x + div.clientLeft, y: rect.y + div.clientTop, width: div.clientWidth, height: div.clientHeight };
+      });
+
+    await page.locator("#two-page").click();
+    await expect(page.locator("#two-page")).toHaveAttribute("data-active", "");
+    await expect.poll(async () => Math.abs((await boxOf('.page[data-page-number="1"]')).y - (await boxOf('.page[data-page-number="2"]')).y)).toBeLessThan(1);
+    expect((await boxOf('.page[data-page-number="2"]')).x).toBeGreaterThan((await boxOf('.page[data-page-number="1"]')).x);
+    for (const number of [1, 2]) {
+      await expect(page.locator(`.pdf-layer[data-page="${number}"]`)).toBeAttached();
+      await expect
+        .poll(async () => {
+          const page$ = await innerOf(`.page[data-page-number="${number}"]`);
+          const layer = await boxOf(`.pdf-layer[data-page="${number}"]`);
+          return Math.max(
+            Math.abs(layer.x - page$.x), Math.abs(layer.y - page$.y),
+            Math.abs(layer.width - page$.width), Math.abs(layer.height - page$.height),
+          );
+        })
+        .toBeLessThanOrEqual(1);
+    }
+
+    await page.locator("#two-page").click();
+    await expect(page.locator("#two-page")).not.toHaveAttribute("data-active", "");
+    await expect
+      .poll(async () => (await boxOf('.page[data-page-number="2"]')).y - (await boxOf('.page[data-page-number="1"]')).y)
+      .toBeGreaterThan(100);
+  });
+
   test("7: 뒤로 가면 원본 PDF로 돌아간다", async ({ context, page, serviceWorker, extensionId }) => {
     const tabId = await openPdf(page, serviceWorker);
     const popup = await openPopup(context, serviceWorker, extensionId, tabId);
