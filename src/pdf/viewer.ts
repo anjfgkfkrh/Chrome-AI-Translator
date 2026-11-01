@@ -64,6 +64,8 @@ const controller = new TranslationController(overlaysElement, {
 });
 
 let phase: Phase = { kind: "opening" };
+/** 열린 문서. 열리기 전에는 다운로드와 인쇄가 아무 일도 하지 않는다. */
+let openedPdf: PDFDocumentProxy | undefined;
 let references: ReferencesStart | undefined;
 /** 번역층을 만들었거나 만드는 중인 쪽 */
 const handledPages = new Set<number>();
@@ -111,6 +113,8 @@ zoomInput.addEventListener("change", () => {
   if (percent >= 25 && percent <= 500) viewer.currentScale = percent / 100;
   renderZoom();
 });
+element("#download").addEventListener("click", () => void saveDocument());
+element("#print").addEventListener("click", () => void printDocument());
 toggleButton.addEventListener("click", () => {
   if (toggleButton.textContent === "번역") void target.translate();
   else void target.showOriginal();
@@ -181,11 +185,40 @@ async function open(data: ArrayBuffer): Promise<void> {
     fail(err instanceof Error && err.name === "PasswordException" ? PASSWORD_MESSAGE : OPEN_FAILED_MESSAGE);
     return;
   }
+  openedPdf = pdf;
   if (await hasText(pdf)) references = await findReferences(pdf);
   else fail(NO_TEXT_MESSAGE);
   viewer.setDocument(pdf);
   void buildThumbnails(pdf);
   linkService.setDocument(pdf);
+}
+
+/** 열린 문서의 원본 바이트 (번역문이 아닌 원본) */
+async function originalBlob(): Promise<Blob | undefined> {
+  if (!openedPdf) return undefined;
+  return new Blob([new Uint8Array(await openedPdf.getData())], { type: "application/pdf" });
+}
+
+async function saveDocument(): Promise<void> {
+  const blob = await originalBlob();
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = /\.pdf$/i.test(document.title) ? document.title : `${document.title}.pdf`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function printDocument(): Promise<void> {
+  const blob = await originalBlob();
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.addEventListener("load", () => frame.contentWindow?.print(), { once: true });
+  frame.src = url;
+  document.body.append(frame);
 }
 
 function fail(message: string): void {

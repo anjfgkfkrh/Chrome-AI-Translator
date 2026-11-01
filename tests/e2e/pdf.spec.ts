@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Page, Worker } from "@playwright/test";
 import { buildPdf, paragraphPages } from "../helpers/pdf-builder";
 import { expect, test, TEST_EXTENSION_PATH } from "./fixtures";
@@ -141,6 +142,17 @@ test.describe("번역", () => {
     await expect(translatedBlocks(page).first()).toBeVisible();
 
     expect(await translatedBlocks(page).first().evaluate((block) => getComputedStyle(block).pointerEvents)).toBe("none");
+  });
+
+  test("다운로드: 원본 바이트 그대로 paper.pdf로 저장한다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.locator("#download").click()]);
+
+    expect(download.suggestedFilename()).toBe("paper.pdf");
+    const saved = readFileSync((await download.path())!);
+    expect(saved.equals(paragraphPages(6))).toBe(true);
   });
 
   test("7: 뒤로 가면 원본 PDF로 돌아간다", async ({ context, page, serviceWorker, extensionId }) => {
