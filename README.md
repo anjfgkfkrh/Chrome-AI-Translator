@@ -1,6 +1,6 @@
 # AITranslator
 
-Claude(Anthropic API) 또는 OpenRouter의 모델로 웹 페이지를 한국어로 번역하는 Chrome 확장 프로그램입니다.
+Claude(Anthropic API) 또는 OpenRouter의 모델로 웹 페이지와 PDF를 한국어로 번역하는 Chrome 확장 프로그램입니다.
 
 - 페이지의 **텍스트 노드 값만** 바꿉니다. 요소, 속성, 이벤트는 그대로라서 번역한 뒤에도 메뉴, 검색, 버튼이 원래대로 동작합니다.
 - "원문 보기"를 누르면 API 호출 없이 곧바로 원문으로 돌아갑니다.
@@ -41,6 +41,7 @@ npm run build
 
 - **단축키:** 다른 확장 프로그램과 겹쳐 Chrome이 할당하지 않았으면 팝업에 "단축키 없음 · 설정하기"가 보입니다. `chrome://extensions/shortcuts`에서 바꿀 수 있습니다. macOS에서는 확장이 켜져 있는 동안 입력란에서 Option+T로 †를 입력할 수 없습니다.
 - **자동 번역 사이트:** 체크하면 그 사이트에 대한 접근 권한을 묻습니다. 권한 창이 뜨면 팝업이 닫히므로, 거부했다면 다음에 팝업을 열 때 안내합니다. 출처(`https://docs.langchain.com` 같은 주소) 단위로 켜지므로 하위 도메인과 포트는 따로 켜야 합니다. 옵션 페이지의 "자동 번역 사이트"에서 "삭제"하면 권한도 돌려줍니다.
+- **PDF:** 크롬에서 연 PDF에서 번역하면 같은 탭이 확장의 PDF 뷰어로 바뀌고, 문단이 원래 자리에서 한국어로 보입니다. 그 사이트에서 처음 쓸 때는 뷰어에서 "허용"을 눌러야 합니다. 화면에 그려진 쪽만 번역하고 스크롤하면 이어서 번역합니다. 내 컴퓨터의 PDF는 뷰어에서 같은 파일을 다시 골라야 합니다. "이 사이트는 항상 번역"을 켠 사이트라도 PDF는 눌렀을 때만 번역합니다.
 - **바뀌는 화면:** 번역 보기 상태에서는 SPA처럼 새로 그려지는 내용도 이어서 번역합니다.
 - **오류:** 키가 없거나 틀렸을 때, 요청 한도 초과, 네트워크 오류 같은 경우 팝업과 페이지 오른쪽 아래 알림에 원인을 보여 줍니다. 이미 번역된 부분은 그대로 둡니다.
 
@@ -81,7 +82,7 @@ npm run build
 | `activeTab`, `scripting` | 팝업·단축키·우클릭으로 번역할 때 지금 탭에 번역 스크립트를 넣음 |
 | `contextMenus` | 우클릭 메뉴 |
 | `https://api.anthropic.com/*` | 백그라운드에서 Claude API 호출 (OpenRouter는 모든 출처의 요청을 허용해서 권한을 따로 받지 않습니다) |
-| 선택 권한 `https://*/*`, `http://*/*` | "이 사이트는 항상 번역"을 켤 때 그 사이트만 요청 |
+| 선택 권한 `https://*/*`, `http://*/*` | "이 사이트는 항상 번역"을 켤 때와 PDF를 받을 때 그 사이트만 요청 |
 
 - 번역하는 **페이지 텍스트는 고른 제공업체(Anthropic API 또는 OpenRouter)로 전송됩니다.** OpenRouter는 고른 모델의 제공업체로 전달합니다. 그 밖의 서버로는 보내지 않습니다. OpenRouter 모델 목록은 키 없이 하루에 한 번 받습니다.
 - API 키는 이 브라우저의 `chrome.storage.local`에만 저장하고 백그라운드 서비스 워커에서만 씁니다. 웹 페이지나 콘텐츠 스크립트로는 보내지 않습니다.
@@ -95,6 +96,13 @@ npm run build
 - iframe 안의 내용과 Shadow DOM 안의 텍스트는 번역하지 않습니다.
 - 속성(`placeholder`, `title`, `alt`, `aria-label`)과 입력란 내용은 번역하지 않습니다.
 - `chrome://` 페이지와 Chrome 웹 스토어는 번역할 수 없습니다.
+- PDF
+  - 스캔한 PDF와 암호로 보호된 PDF는 번역할 수 없습니다.
+  - 표 안의 글자, 수식, 그림 속 글자는 원본 그대로 둡니다. 표와 그림의 설명은 번역합니다.
+  - 참고문헌과 그 뒤의 부록은 번역하지 않습니다.
+  - 단이나 쪽을 넘어가는 문단은 조각별로 번역합니다.
+  - 번역문을 드래그하면 가려진 영어가 복사됩니다. 대신 번역문 아래의 링크를 누를 수 있습니다.
+  - 번역을 누르면 1쪽부터 열립니다. 주소에 `#page=N`이 있을 때만 그 쪽부터 엽니다.
 
 ## 개발
 
@@ -122,11 +130,13 @@ npm run test:live   # SPEC 10.3: 실제 docs.langchain.com + 목 API (인터넷 
 ```
 src/background/   서비스 워커: 메시지, 단축키, 우클릭 메뉴, 자동 번역 등록, 배치·재시도(translator), 캐시, 프롬프트, 제공업체(providers/)
 src/content/      콘텐츠 스크립트: 텍스트 수집(collect), 교체·복원(apply), 화면 변화 감시(observer), 상태(controller), 알림(toast)
+src/pdf/          PDF 뷰어: 받기(source), 문단 복원(layout), 번역층(overlay), pdf.js 연결(pdfjs, viewer)
 src/popup/        팝업
 src/options/      옵션 페이지
 src/shared/       설정 저장소, 메시지 형식, 모델 목록, 용어집, 사용량
 tests/unit/       단위 테스트          tests/e2e/   E2E (마일스톤별 m1~m7)
 tests/live/       실제 사이트 테스트   tests/fixtures/   테스트용 HTML
+tests/helpers/    목 번역기, 목 API, 테스트용 PDF 생성(pdf-builder)
 ```
 
 ### SPEC 10장 항목과 테스트

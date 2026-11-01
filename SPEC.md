@@ -368,6 +368,7 @@ interface UsageStats {
 5. **Shadow DOM, 같은 출처 iframe** 지원.
 6. **키 없는 모드**: Chrome 내장 온디바이스 번역 API 사용 가능 여부 조사 후 대체 제공업체로 추가.
 7. Chrome 웹 스토어 배포.
+8. **PDF 번역**: 확장 안의 pdf.js 뷰어로 PDF를 번역. (2026-11-01 추가함. 13장 "PDF 번역")
 
 ---
 
@@ -396,6 +397,7 @@ interface UsageStats {
 │   │   ├── apply.ts            # 교체/복원 (WeakMap)
 │   │   ├── observer.ts         # MutationObserver
 │   │   └── toast.ts            # Shadow DOM 알림
+│   ├── pdf/    (viewer.html, viewer.css, viewer.ts, pdfjs.ts, source.ts, layout.ts, overlay.ts)
 │   ├── popup/  (popup.html, popup.ts, popup.css)
 │   ├── options/ (options.html, options.ts, options.css)
 │   └── shared/  (messages.ts, storage.ts, hash.ts)
