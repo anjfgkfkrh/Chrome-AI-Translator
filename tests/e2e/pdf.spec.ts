@@ -190,6 +190,84 @@ test.describe("번역", () => {
       .toBeGreaterThan(100);
   });
 
+  test("도구 막대: 쪽 번호 입력은 이동하고 범위 밖이면 현재 쪽으로 되돌린다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(page.locator("#page-total")).toHaveText("/ 6");
+
+    await page.locator("#page-input").fill("4");
+    await page.locator("#page-input").press("Enter");
+    await expect(page.locator("#page-input")).toHaveValue("4");
+    await expect.poll(() => page.evaluate(() => document.querySelector("#viewerContainer")!.scrollTop)).toBeGreaterThan(0);
+
+    for (const outside of ["0", "7"]) {
+      await page.locator("#page-input").fill(outside);
+      await page.locator("#page-input").press("Enter");
+      await expect(page.locator("#page-input")).toHaveValue("4");
+    }
+  });
+
+  test("도구 막대: 배율 입력은 적용하고 25 미만이나 500 초과면 이전 값으로 되돌린다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+
+    await page.locator("#zoom-input").fill("150");
+    await page.locator("#zoom-input").press("Enter");
+    await expect(page.locator("#zoom-input")).toHaveValue("150%");
+
+    for (const outside of ["24", "501"]) {
+      await page.locator("#zoom-input").fill(outside);
+      await page.locator("#zoom-input").press("Enter");
+      await expect(page.locator("#zoom-input")).toHaveValue("150%");
+    }
+  });
+
+  test("도구 막대: 페이지 맞춤 버튼은 누를 때마다 켜고 끈다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+
+    await page.locator("#fit").click();
+    await expect(page.locator("#fit")).toHaveAttribute("data-active", "");
+    await page.locator("#fit").click();
+    await expect(page.locator("#fit")).not.toHaveAttribute("data-active", "");
+  });
+
+  test("도구 막대: 목차 버튼으로 썸네일 패널을 열고, 썸네일을 누르면 그 쪽으로 이동한다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+
+    await page.locator("#menu").click();
+    await expect(page.locator("#sidebar")).toBeVisible();
+    await expect(page.locator('.thumb[data-page="1"]')).toHaveAttribute("data-active", "");
+
+    await page.locator('.thumb[data-page="3"]').click();
+    await expect(page.locator("#page-input")).toHaveValue("3");
+    await expect(page.locator('.thumb[data-page="3"]')).toHaveAttribute("data-active", "");
+    await expect(page.locator('.thumb[data-page="1"]')).not.toHaveAttribute("data-active", "");
+  });
+
+  test("도구 막대: 회전한 뒤에도 번역층 영역이 페이지 안쪽과 맞는다", async ({ page, extensionId }) => {
+    await page.goto(viewerAddress(extensionId, PDF_URL));
+    await expect(translatedBlocks(page).first()).toBeVisible();
+
+    await page.locator("#rotate").click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const div = document.querySelector<HTMLElement>('.page[data-page-number="1"]')!;
+          const box = div.getBoundingClientRect();
+          const layer = document.querySelector('.pdf-layer[data-page="1"]')!.getBoundingClientRect();
+          return [
+            layer.left - (box.left + div.clientLeft),
+            layer.top - (box.top + div.clientTop),
+            layer.width - div.clientWidth,
+            layer.height - div.clientHeight,
+          ].every((difference) => Math.abs(difference) <= 1);
+        }),
+      )
+      .toBe(true);
+  });
+
   test("7: 뒤로 가면 원본 PDF로 돌아간다", async ({ context, page, serviceWorker, extensionId }) => {
     const tabId = await openPdf(page, serviceWorker);
     const popup = await openPopup(context, serviceWorker, extensionId, tabId);
