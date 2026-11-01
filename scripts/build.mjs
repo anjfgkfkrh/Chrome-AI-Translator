@@ -22,6 +22,7 @@ const builds = [
       { in: "src/background/index.ts", out: "background" },
       { in: "src/options/options.ts", out: "options/options" },
       { in: "src/popup/popup.ts", out: "popup/popup" },
+      { in: "src/pdf/viewer.ts", out: "pdf/viewer" },
     ],
   },
   {
@@ -41,6 +42,19 @@ const staticFiles = [
   ["src/options/options.css", "options/options.css"],
   ["src/popup/popup.html", "popup/popup.html"],
   ["src/popup/popup.css", "popup/popup.css"],
+  ["src/pdf/viewer.html", "pdf/viewer.html"],
+  ["src/pdf/viewer.css", "pdf/viewer.css"],
+];
+
+// 번들하지 않는 pdf.js 자원: [node_modules/pdfjs-dist 안의 경로, dist/pdf 안의 경로]
+const pdfjsFiles = [
+  ["build/pdf.worker.min.mjs", "pdf.worker.min.mjs"],
+  ["web/pdf_viewer.css", "pdf_viewer.css"],
+  ["web/images", "images"],
+  ["cmaps", "cmaps"],
+  ["standard_fonts", "standard_fonts"],
+  ["wasm", "wasm"],
+  ["iccs", "iccs"],
 ];
 
 const common = {
@@ -61,6 +75,12 @@ async function copyStatic() {
   }
 }
 
+async function copyPdfjs() {
+  for (const [from, to] of pdfjsFiles) {
+    await cp(path.join(root, "node_modules/pdfjs-dist", from), path.join(outdir, "pdf", to), { recursive: true });
+  }
+}
+
 async function testManifest() {
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
   manifest.host_permissions = [...manifest.host_permissions, ...TEST_HOSTS];
@@ -69,6 +89,7 @@ async function testManifest() {
 
 await rm(outdir, { recursive: true, force: true });
 await copyStatic();
+await copyPdfjs();
 
 if (watching) {
   for (const build of builds) {

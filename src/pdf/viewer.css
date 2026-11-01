@@ -1,0 +1,92 @@
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  font: 13px/1.5 system-ui, sans-serif;
+}
+
+#toolbar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid #d1d9e0;
+}
+
+#status {
+  margin-left: 4px;
+}
+
+#notice {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #d1d9e0;
+  background: Canvas;
+}
+
+#notice[hidden],
+#notice [hidden] {
+  display: none;
+}
+
+#notice-text {
+  margin: 0;
+}
+
+/* PDFViewer는 컨테이너가 absolute이기를 요구한다. */
+#viewerContainer {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: auto;
+}
+
+/* 링크 클릭을 아래 페이지로 넘긴다 (SPEC 13장 "PDF: 번역문 위의 마우스"). */
+#overlays {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.pdf-layer {
+  position: absolute;
+  z-index: 5;
+  overflow: hidden;
+}
+
+.pdf-block {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  visibility: hidden;
+  color: #000;
+  background: #fff;
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  line-height: 1.28;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.pdf-block[data-translated] {
+  visibility: visible;
+}

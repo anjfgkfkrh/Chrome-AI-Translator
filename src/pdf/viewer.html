@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>PDF</title>
+    <link rel="stylesheet" href="pdf_viewer.css" />
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <span id="page-info"></span>
+      <button id="zoom-out" type="button" aria-label="축소">−</button>
+      <button id="zoom-in" type="button" aria-label="확대">+</button>
+      <button id="toggle" type="button" hidden></button>
+      <span id="status" role="status"></span>
+    </header>
+    <section id="notice" hidden>
+      <p id="notice-text"></p>
+      <button id="allow" type="button" hidden>허용</button>
+      <input id="file" type="file" accept="application/pdf,.pdf" hidden />
+      <a id="open-original" hidden>원본 PDF 열기</a>
+    </section>
+    <div id="viewerContainer">
+      <div id="viewer" class="pdfViewer"></div>
+      <div id="overlays"></div>
+    </div>
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>

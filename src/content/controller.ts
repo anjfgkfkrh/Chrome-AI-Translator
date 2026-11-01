@@ -47,7 +47,12 @@ export class TranslationController {
   /** 그 건을 시작한 주소 (쿼리·해시 뺌) */
   private logUrl = "";
 
-  constructor(root: Element) {
+  /** 기록에 남기고 페이지 이동을 가늠하는 주소 */
+  private readonly pageUrl: () => string;
+
+  /** pageUrl: 페이지 주소가 실제 문서 주소가 아닐 때(PDF 뷰어) 넘긴다. 기본은 지금 페이지 주소 */
+  constructor(root: Element, options: { pageUrl?: () => string } = {}) {
+    this.pageUrl = options.pageUrl ?? locationUrl;
     this.page = new PageTranslator(root);
     this.watcher = new MutationWatcher(
       root,
@@ -128,10 +133,10 @@ export class TranslationController {
     this.running++;
     // 페이지 번역을 시작할 때만 캐시 정리의 새 턴과 기록의 새 건을 연다. 화면 변화로 더 번역하는 것은 같은 턴·같은 건이다.
     // 다만 주소가 바뀌었으면 페이지를 새로 읽지 않는 사이트(SPA)의 페이지 이동이므로 새로 연다 (SPEC 13장).
-    const newTurn = changed === undefined || pageUrl() !== this.logUrl;
+    const newTurn = changed === undefined || this.pageUrl() !== this.logUrl;
     if (newTurn) {
       this.logId = newLogId();
-      this.logUrl = pageUrl();
+      this.logUrl = this.pageUrl();
     }
     return this.page
       .translate((groups, deliver) => this.request(groups, deliver, newTurn, retranslate), changed)
@@ -190,7 +195,7 @@ export class TranslationController {
     return {
       id: this.logId,
       title: document.title.trim().slice(0, 200),
-      url: pageUrl(),
+      url: this.pageUrl(),
       automatic: this.automatic,
     };
   }
@@ -217,7 +222,7 @@ export class TranslationController {
 }
 
 /** 기록에 남기고 페이지 이동을 가늠하는 주소: 쿼리·해시는 뺀다 (SPEC 13장 "기록 항목") */
-function pageUrl(): string {
+function locationUrl(): string {
   return location.href.split(/[?#]/)[0]!;
 }
 
