@@ -13,6 +13,7 @@ import {
 } from "../shared/messages";
 import { isProviderId, providerInfo, type ProviderId } from "../shared/models";
 import { openRouterModelIds } from "../shared/openrouter-models";
+import { isLocalPdfUrl, isViewerUrl, viewerUrl } from "../shared/pdf";
 import { originPattern } from "../shared/sites";
 import { activeApiKey, getSettings } from "../shared/storage";
 import { clearTranslationLog } from "../shared/translation-log";
@@ -47,6 +48,8 @@ const MENU_ID = "translate-page";
 /** manifest.json의 commands 이름 */
 const TOGGLE_COMMAND = "toggle-translation";
 const IDLE_STATE: PageState = { status: "idle", progress: { done: 0, total: 0 }, partial: false };
+/** PDF 뷰어를 여는 중. 뷰어가 응답하기 전까지 팝업에 "번역" 버튼 대신 진행 상태를 보여 준다. */
+const PDF_OPENING_STATE: PageState = { status: "translating", progress: { done: 0, total: 0 }, partial: false };
 
 chrome.runtime.onInstalled.addListener((details) => {
   void createContextMenu();
@@ -161,6 +164,12 @@ async function translateTab(tabId: number): Promise<TabState> {
   // 이미 넣은 콘텐츠 스크립트가 있으면 그쪽에 맡기고, 없으면 넣는다. 넣으면 바로 번역을 시작한다.
   const state = await sendToTab(tabId, { type: "translate" });
   if (state) return state;
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  if (isViewerUrl(tab?.url)) return PDF_OPENING_STATE; // 뷰어가 아직 뜨는 중
+  if (tab?.url !== undefined && (await isPdfTab(tabId, tab.url))) {
+    await chrome.tabs.update(tabId, { url: viewerUrl(tab.url) });
+    return PDF_OPENING_STATE;
+  }
   try {
     // 메뉴·팝업·단축키를 쓴 탭에는 activeTab 권한이 생긴다.
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
@@ -169,6 +178,16 @@ async function translateTab(tabId: number): Promise<TabState> {
     return { status: "unsupported" };
   }
   return tabState(tabId);
+}
+
+/** 내장 PDF 뷰어로 열린 탭인지. file://은 파일 접근 설정이 꺼져 있으면 스크립트를 넣을 수 없어 주소로 판단한다. */
+async function isPdfTab(tabId: number, url: string): Promise<boolean> {
+  try {
+    const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => document.contentType });
+    return result?.result === "application/pdf";
+  } catch {
+    return isLocalPdfUrl(url);
+  }
 }
 
 function tabAction(tabId: number, action: TabAction): Promise<TabState> {
@@ -204,6 +223,7 @@ async function tabState(tabId: number): Promise<TabState> {
   const state = await sendToTab(tabId, { type: "get-state" });
   if (state) return state;
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  if (isViewerUrl(tab?.url)) return PDF_OPENING_STATE;
   return tab && !canInject(tab.url) ? { status: "unsupported" } : IDLE_STATE;
 }
 

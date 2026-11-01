@@ -28,6 +28,7 @@ export function installChromeMock() {
     throw new Error("Could not establish connection. Receiving end does not exist.");
   });
   const getTab = vi.fn(async (tabId: number) => ({ id: tabId, url: "https://example.com/docs" }) as chrome.tabs.Tab);
+  const updateTab = vi.fn(async () => ({}) as chrome.tabs.Tab);
   /** 지금 보고 있는 탭 (팝업의 대상) */
   const queryTabs = vi.fn(async (_query: chrome.tabs.QueryInfo) => [{ id: 7 } as chrome.tabs.Tab]);
   const createTab = vi.fn(async () => ({}));
@@ -128,7 +129,7 @@ export function installChromeMock() {
       getAll: getCommands,
       onCommand: { addListener: (fn: Listener) => onCommand.push(fn) },
     },
-    tabs: { sendMessage: tabsSendMessage, get: getTab, create: createTab, query: queryTabs },
+    tabs: { sendMessage: tabsSendMessage, get: getTab, update: updateTab, create: createTab, query: queryTabs },
     scripting: {
       executeScript,
       registerContentScripts,
@@ -156,6 +157,7 @@ export function installChromeMock() {
     executeScript,
     tabsSendMessage,
     getTab,
+    updateTab,
     queryTabs,
     createTab,
     getCommands,

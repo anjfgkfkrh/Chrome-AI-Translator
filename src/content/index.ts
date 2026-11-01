@@ -1,4 +1,4 @@
-import type { ContentCommand, PageState } from "../shared/messages";
+import { listenForCommands } from "./commands";
 import { TranslationController } from "./controller";
 
 // 콘텐츠 스크립트 진입점. 번역을 시작할 때(우클릭 메뉴, 팝업, 단축키) 백그라운드가 이 파일을 넣고,
@@ -12,36 +12,15 @@ declare global {
   var __aitranslatorAutoRun: boolean | undefined;
 }
 
-if (document.body) {
+// PDF 문서는 뷰어로 옮겨 번역한다. 내장 뷰어의 내용은 읽을 수 없으므로 여기서는 아무것도 하지 않는다 (SPEC 13장).
+if (document.body && document.contentType !== "application/pdf") {
   const auto = globalThis.__aitranslatorAutoRun === true;
   globalThis.__aitranslatorAutoRun = undefined; // 다음에 직접 넣을 때 섞이지 않도록 한 번 읽고 지운다
   let controller = globalThis.__aitranslatorController;
   if (!controller) {
     controller = globalThis.__aitranslatorController = new TranslationController(document.body);
-    listen(controller);
+    listenForCommands(controller);
   }
   // 이 파일을 넣는 것은 번역을 시작할 때뿐이다.
   void controller.translate({ auto });
-}
-
-/** 백그라운드의 명령 (팝업·단축키). 응답은 언제나 그 시점의 페이지 상태다. */
-function listen(controller: TranslationController): void {
-  chrome.runtime.onMessage.addListener((message: ContentCommand, _sender, sendResponse: (state: PageState) => void) => {
-    switch (message?.type) {
-      case "get-state":
-        sendResponse(controller.state());
-        return false;
-      case "translate":
-        void controller.translate();
-        sendResponse(controller.state());
-        return false;
-      case "retranslate":
-        void controller.retranslate().then(() => sendResponse(controller.state()));
-        return true; // 비동기로 응답한다
-      case "show-original":
-        void controller.showOriginal().then(() => sendResponse(controller.state()));
-        return true; // 비동기로 응답한다
-    }
-    return false;
-  });
 }

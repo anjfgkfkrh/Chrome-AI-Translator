@@ -313,10 +313,65 @@ describe("팝업 메시지", () => {
 
   it("번역: 스크립트를 넣을 수 없으면 번역할 수 없음을 돌려준다", async () => {
     saveKey();
-    chromeMock.executeScript.mockRejectedValueOnce(new Error("Cannot access contents of the page"));
+    chromeMock.executeScript.mockRejectedValue(new Error("Cannot access contents of the page"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(await ask({ type: "tab-action", tabId: 7, action: "translate" })).toEqual({ status: "unsupported" });
+  });
+
+  describe("PDF (SPEC 13장 \"PDF 번역\")", () => {
+    const pdfUrl = "https://example.com/paper.pdf#page=3";
+    const viewer = () => chrome.runtime.getURL("pdf/viewer.html");
+    const opening = { status: "translating", progress: { done: 0, total: 0 }, partial: false };
+
+    it("번역: 내장 뷰어로 열린 PDF면 같은 탭을 뷰어로 바꾸고 번역 스크립트를 넣지 않는다", async () => {
+      saveKey();
+      chromeMock.getTab.mockResolvedValue({ id: 7, url: pdfUrl } as chrome.tabs.Tab);
+      chromeMock.executeScript.mockResolvedValueOnce([{ result: "application/pdf" }] as never);
+
+      expect(await ask({ type: "tab-action", tabId: 7, action: "translate" })).toEqual(opening);
+      expect(chromeMock.updateTab).toHaveBeenCalledWith(7, { url: `${viewer()}?file=${encodeURIComponent(pdfUrl)}` });
+      expect(chromeMock.executeScript).not.toHaveBeenCalledWith({ target: { tabId: 7 }, files: ["content.js"] });
+    });
+
+    it("번역: 주소가 .pdf로 끝나도 문서가 PDF가 아니면 뷰어로 옮기지 않는다", async () => {
+      saveKey();
+      chromeMock.getTab.mockResolvedValue({ id: 7, url: "https://example.com/paper.pdf" } as chrome.tabs.Tab);
+      chromeMock.executeScript.mockResolvedValueOnce([{ result: "text/html" }] as never);
+
+      await ask({ type: "tab-action", tabId: 7, action: "translate" });
+
+      expect(chromeMock.updateTab).not.toHaveBeenCalled();
+      expect(chromeMock.executeScript).toHaveBeenCalledWith({ target: { tabId: 7 }, files: ["content.js"] });
+    });
+
+    it("번역: 스크립트를 넣을 수 없는 file:// PDF는 주소로 판단해 뷰어로 옮긴다", async () => {
+      saveKey();
+      chromeMock.getTab.mockResolvedValue({ id: 7, url: "file:///Users/me/a.PDF" } as chrome.tabs.Tab);
+      chromeMock.executeScript.mockRejectedValue(new Error("Cannot access contents of the page"));
+
+      expect(await ask({ type: "tab-action", tabId: 7, action: "translate" })).toEqual(opening);
+      expect(chromeMock.updateTab).toHaveBeenCalledTimes(1);
+    });
+
+    it("키가 없으면 PDF도 옵션 페이지를 연다", async () => {
+      chromeMock.getTab.mockResolvedValue({ id: 7, url: pdfUrl } as chrome.tabs.Tab);
+
+      await ask({ type: "tab-action", tabId: 7, action: "translate" });
+
+      expect(chromeMock.openOptionsPage).toHaveBeenCalled();
+      expect(chromeMock.updateTab).not.toHaveBeenCalled();
+    });
+
+    it("탭 상태·번역: 뷰어가 응답하기 전이면 여는 중이고 다시 옮기지 않는다", async () => {
+      saveKey();
+      chromeMock.getTab.mockResolvedValue({ id: 7, url: `${viewer()}?file=x` } as chrome.tabs.Tab);
+
+      expect(await ask({ type: "get-tab-state", tabId: 7 })).toEqual(opening);
+      expect(await ask({ type: "tab-action", tabId: 7, action: "translate" })).toEqual(opening);
+      expect(chromeMock.updateTab).not.toHaveBeenCalled();
+      expect(chromeMock.executeScript).not.toHaveBeenCalled();
+    });
   });
 
   it("원문 보기: 콘텐츠 스크립트에 전달한다", async () => {
