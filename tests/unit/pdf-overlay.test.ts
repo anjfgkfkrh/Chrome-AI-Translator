@@ -5,11 +5,13 @@ import { PdfOverlay, type PageLookup } from "../../src/pdf/overlay";
 const BLOCK: Block = { text: "Original text.", left: 72, right: 300, top: 100, bottom: 112, size: 10, centered: false, lines: 1, wideLines: 0 };
 const VIEWPORT = { width: 612, height: 792 };
 
-function setup() {
+function setup(pagesRotation = 0) {
   document.body.innerHTML = '<div id="container"><div id="pages"></div><div id="overlays"></div></div>';
   const root = document.querySelector<HTMLElement>("#overlays")!;
   const pageDiv = document.createElement("div");
-  const viewer: PageLookup = { currentScale: 1.5, getPageView: () => ({ div: pageDiv }) };
+  Object.defineProperty(pageDiv, "clientWidth", { value: 600 });
+  Object.defineProperty(pageDiv, "clientHeight", { value: 800 });
+  const viewer: PageLookup = { currentScale: 1.5, pagesRotation, getPageView: () => ({ div: pageDiv }) };
   const overlay = new PdfOverlay(root, document.querySelector("#container")!, document.querySelector("#pages")!, viewer);
   return { root, overlay, pageDiv };
 }
@@ -84,5 +86,39 @@ describe("PdfOverlay", () => {
 
     expect(root.querySelector("p")!.style.textAlign).toBe("center");
     expect(root.style.getPropertyValue("--pdf-scale")).toBe(String((1.5 * 96) / 72));
+  });
+
+  it("회전 0도에서는 transform을 비운다", () => {
+    const { root, overlay } = setup(0);
+    overlay.addPage(1, [BLOCK], VIEWPORT, null);
+
+    const layer = root.querySelector<HTMLElement>(".pdf-layer")!;
+    expect(layer.style.transform).toBe("");
+    expect(layer.style.width).toBe("600px");
+    expect(layer.style.height).toBe("800px");
+  });
+
+  it("회전 90도에서는 가로세로를 바꾸고 translate 후 회전한다", () => {
+    const { root, overlay } = setup(90);
+    overlay.addPage(1, [BLOCK], VIEWPORT, null);
+
+    const layer = root.querySelector<HTMLElement>(".pdf-layer")!;
+    expect(layer.style.width).toBe("800px");
+    expect(layer.style.height).toBe("600px");
+    expect(layer.style.transform).toBe("translate(600px, 0px) rotate(90deg)");
+  });
+
+  it("회전 180도와 270도의 transform", () => {
+    const r180 = setup(180);
+    r180.overlay.addPage(1, [BLOCK], VIEWPORT, null);
+    const layer180 = r180.root.querySelector<HTMLElement>(".pdf-layer")!;
+    expect(layer180.style.width).toBe("600px");
+    expect(layer180.style.transform).toBe("translate(600px, 800px) rotate(180deg)");
+
+    const r270 = setup(270);
+    r270.overlay.addPage(1, [BLOCK], VIEWPORT, null);
+    const layer270 = r270.root.querySelector<HTMLElement>(".pdf-layer")!;
+    expect(layer270.style.width).toBe("800px");
+    expect(layer270.style.transform).toBe("translate(0px, 800px) rotate(270deg)");
   });
 });

@@ -28,7 +28,13 @@ const NO_TEXT_MESSAGE = "이 PDF에는 번역할 텍스트가 없습니다. 스�
 
 type Phase = { kind: "opening" } | { kind: "failed"; message: string } | { kind: "ready" };
 
-const pageInfo = element<HTMLSpanElement>("#page-info");
+const titleText = element<HTMLSpanElement>("#title");
+const pageInput = element<HTMLInputElement>("#page-input");
+const pageTotal = element<HTMLSpanElement>("#page-total");
+const zoomInput = element<HTMLInputElement>("#zoom-input");
+const fitButton = element<HTMLButtonElement>("#fit");
+const menuButton = element<HTMLButtonElement>("#menu");
+const sidebar = element<HTMLElement>("#sidebar");
 const statusText = element<HTMLSpanElement>("#status");
 const toggleButton = element<HTMLButtonElement>("#toggle");
 const notice = element<HTMLElement>("#notice");
@@ -76,11 +82,35 @@ function state(): PageState {
   return { status: "error", progress, error: phase.message, partial: false };
 }
 
-document.title = fileNameOf(new URLSearchParams(location.search).get("file"));
+setTitle(fileNameOf(new URLSearchParams(location.search).get("file")));
 listenForCommands(target);
 
 element("#zoom-out").addEventListener("click", () => viewer.decreaseScale());
 element("#zoom-in").addEventListener("click", () => viewer.increaseScale());
+element("#rotate").addEventListener("click", () => {
+  viewer.pagesRotation = (viewer.pagesRotation + 90) % 360;
+  requestAnimationFrame(() => overlay.place());
+});
+fitButton.addEventListener("click", () => {
+  viewer.currentScaleValue = viewer.currentScaleValue === "page-fit" ? "page-width" : "page-fit";
+  renderZoom();
+});
+menuButton.addEventListener("click", () => {
+  sidebar.hidden = !sidebar.hidden;
+  document.body.toggleAttribute("data-sidebar", !sidebar.hidden);
+  menuButton.setAttribute("aria-expanded", String(!sidebar.hidden));
+  viewer.update();
+});
+pageInput.addEventListener("change", () => {
+  const page = Number(pageInput.value);
+  if (Number.isInteger(page) && page >= 1 && page <= viewer.pagesCount) viewer.currentPageNumber = page;
+  renderPageInfo();
+});
+zoomInput.addEventListener("change", () => {
+  const percent = Number.parseFloat(zoomInput.value);
+  if (percent >= 25 && percent <= 500) viewer.currentScale = percent / 100;
+  renderZoom();
+});
 toggleButton.addEventListener("click", () => {
   if (toggleButton.textContent === "번역") void target.translate();
   else void target.showOriginal();
@@ -96,18 +126,21 @@ allowButton.addEventListener("click", () => {
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
-  document.title = file.name;
+  setTitle(file.name);
   await open(await file.arrayBuffer());
 });
 
 eventBus.on("pagesinit", () => {
-  viewer.currentScaleValue = "page-width";
+  viewer.currentScaleValue = "auto";
   const page = pageFromHash(source, viewer.pagesCount);
   if (page !== undefined) viewer.currentPageNumber = page;
   renderPageInfo();
 });
 eventBus.on("pagechanging", renderPageInfo);
-eventBus.on("scalechanging", () => requestAnimationFrame(() => overlay.place()));
+eventBus.on("scalechanging", () => {
+  renderZoom();
+  requestAnimationFrame(() => overlay.place());
+});
 eventBus.on("pagerendered", (event: { pageNumber: number; isDetailView?: boolean; error?: unknown }) => {
   if (phase.kind !== "failed" && !event.isDetailView && !event.error) void addPage(event.pageNumber);
 });
@@ -151,6 +184,7 @@ async function open(data: ArrayBuffer): Promise<void> {
   if (await hasText(pdf)) references = await findReferences(pdf);
   else fail(NO_TEXT_MESSAGE);
   viewer.setDocument(pdf);
+  void buildThumbnails(pdf);
   linkService.setDocument(pdf);
 }
 
@@ -204,8 +238,55 @@ async function addPage(pageNumber: number): Promise<void> {
   }
 }
 
+function setTitle(title: string): void {
+  document.title = title;
+  titleText.textContent = title;
+}
+
 function renderPageInfo(): void {
-  pageInfo.textContent = `${viewer.currentPageNumber} / ${viewer.pagesCount}`;
+  pageInput.value = String(viewer.currentPageNumber);
+  pageTotal.textContent = `/ ${viewer.pagesCount}`;
+  for (const thumb of sidebar.children) {
+    thumb.toggleAttribute("data-active", thumb.getAttribute("data-page") === String(viewer.currentPageNumber));
+  }
+}
+
+function renderZoom(): void {
+  zoomInput.value = `${Math.round(viewer.currentScale * 100)}%`;
+  fitButton.toggleAttribute("data-active", viewer.currentScaleValue === "page-fit");
+}
+
+async function buildThumbnails(pdf: PDFDocumentProxy): Promise<void> {
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      void drawThumbnail(pdf, entry.target as HTMLElement);
+    }
+  }, { root: sidebar, rootMargin: "200px" });
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const thumb = document.createElement("button");
+    thumb.className = "thumb";
+    thumb.type = "button";
+    thumb.dataset.page = String(pageNumber);
+    thumb.setAttribute("aria-label", `${pageNumber}쪽`);
+    const label = document.createElement("span");
+    label.textContent = String(pageNumber);
+    thumb.append(document.createElement("canvas"), label);
+    thumb.addEventListener("click", () => (viewer.currentPageNumber = pageNumber));
+    sidebar.append(thumb);
+    observer.observe(thumb);
+  }
+}
+
+async function drawThumbnail(pdf: PDFDocumentProxy, thumb: HTMLElement): Promise<void> {
+  const page = await pdf.getPage(Number(thumb.dataset.page));
+  const canvas = thumb.querySelector("canvas")!;
+  const unit = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: (108 * 2) / unit.width });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvas, viewport }).promise;
 }
 
 /** 도구 막대의 상태 문구와 번역/원문 버튼 (팝업과 같은 문구) */

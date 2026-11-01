@@ -57,7 +57,8 @@ test.describe("번역", () => {
     await expect(translatedBlocks(page).first()).toContainText("PARAGRAPH LINE ONE");
     await expect(popup.getByRole("status")).toHaveText("번역 완료");
     await expect(page.locator("#status")).toHaveText("번역 완료");
-    await expect(page.locator("#page-info")).toHaveText("2 / 6");
+    await expect(page.locator("#page-input")).toHaveValue("2");
+    await expect(page.locator("#page-total")).toHaveText("/ 6");
     await expect(page).toHaveTitle("paper.pdf");
     await expect
       .poll(async () => ((await readStorage(serviceWorker)).translationLog as { page: { url: string; title: string } }[])?.[0]?.page)

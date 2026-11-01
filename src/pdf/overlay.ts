@@ -17,6 +17,8 @@ const DARK_LUMINANCE = 128;
 /** PDFViewer에서 번역층이 쓰는 부분 */
 export interface PageLookup {
   readonly currentScale: number;
+  /** 사용자가 돌린 각도: 0, 90, 180, 270 */
+  readonly pagesRotation: number;
   getPageView(index: number): { div: HTMLElement };
 }
 
@@ -65,8 +67,14 @@ export class PdfOverlay {
       const page = div.getBoundingClientRect();
       layer.style.left = `${page.left - box.left + this.container.scrollLeft + div.clientLeft}px`;
       layer.style.top = `${page.top - box.top + this.container.scrollTop + div.clientTop}px`;
-      layer.style.width = `${div.clientWidth}px`;
-      layer.style.height = `${div.clientHeight}px`;
+      // 번역층은 돌리기 전의 크기로 두고 페이지와 함께 돌린다. 문단 좌표가 돌리기 전 쪽 기준이기 때문이다.
+      const { pagesRotation: rotation } = this.viewer;
+      const sideways = rotation % 180 !== 0;
+      layer.style.width = `${sideways ? div.clientHeight : div.clientWidth}px`;
+      layer.style.height = `${sideways ? div.clientWidth : div.clientHeight}px`;
+      const moveX = rotation === 90 || rotation === 180 ? div.clientWidth : 0;
+      const moveY = rotation === 180 || rotation === 270 ? div.clientHeight : 0;
+      layer.style.transform = rotation === 0 ? "" : `translate(${moveX}px, ${moveY}px) rotate(${rotation}deg)`;
     }
   }
 
@@ -84,7 +92,10 @@ export class PdfOverlay {
     paragraph.style.top = `${(block.top / viewport.height) * 100}%`;
     paragraph.style.height = `${((block.bottom - block.top) / viewport.height) * 100}%`;
     if (block.centered) paragraph.style.textAlign = "center";
-    if (canvas && context) applyBackground(paragraph, canvas, context, left / viewport.width, block.top / viewport.height);
+    if (canvas && context) {
+      const [x, y] = rotatedPoint(left / viewport.width, block.top / viewport.height, this.viewer.pagesRotation);
+      applyBackground(paragraph, canvas, context, x, y);
+    }
     const text = document.createTextNode(block.text);
     this.originals.set(text, block.text);
     this.sizes.set(paragraph, block.size);
@@ -102,6 +113,14 @@ export class PdfOverlay {
       fitFont(paragraph, this.sizes.get(paragraph) ?? 0);
     }
   }
+}
+
+/** 돌리기 전 쪽의 비율 좌표를 돌린 뒤의 캔버스 비율 좌표로 바꾼다. */
+function rotatedPoint(x: number, y: number, rotation: number): [number, number] {
+  if (rotation === 90) return [1 - y, x];
+  if (rotation === 180) return [1 - x, 1 - y];
+  if (rotation === 270) return [y, 1 - x];
+  return [x, y];
 }
 
 /** 글자 크기를 5%씩 줄여 상자에 맞춘다. 60%에서도 넘치면 아래로 넘치게 둔다. */

@@ -10,32 +10,81 @@ body {
 }
 
 #toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 12px;
-  border-bottom: 1px solid #d1d9e0;
+  height: 56px;
+  padding: 0 16px;
+  background: #323639;
+  color: #f1f3f4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
-#status {
-  margin-left: 4px;
+#start, #end { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+#end { justify-content: flex-end; }
+#center { display: flex; align-items: center; gap: 4px; flex: none; }
+#title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.separator { width: 1px; height: 20px; margin: 0 12px; background: rgba(255, 255, 255, 0.3); }
+
+button.icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: inherit; cursor: pointer;
 }
+button.icon:hover { background: rgba(255, 255, 255, 0.08); }
+button.icon:focus-visible, #toggle:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 1px; }
+button.icon svg { width: 20px; height: 20px; fill: currentColor; }
+#fit[data-active] { color: #8ab4f8; }
+
+#toolbar input {
+  box-sizing: border-box; height: 24px; padding: 0 4px; border: 0; border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5); color: inherit; font: inherit; text-align: center;
+}
+#page-group { display: inline-flex; align-items: center; gap: 8px; }
+#page-input { width: 4ch; }
+#zoom-input { width: 6ch; }
+#page-total { white-space: nowrap; }
+
+#status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdc1c6; }
+#toggle {
+  flex: none; height: 32px; padding: 0 16px; border: 0; border-radius: 16px;
+  background: #8ab4f8; color: #202124; font: 500 13px system-ui, sans-serif; cursor: pointer;
+}
+#toggle:hover { background: #a8c7fa; }
+
+#sidebar {
+  position: absolute; top: 56px; bottom: 0; left: 0; z-index: 15;
+  box-sizing: border-box; width: 200px; padding: 16px 0; overflow-y: auto;
+  background: #292a2d; color: #e8eaed; color-scheme: dark;
+}
+#sidebar[hidden] { display: none; }
+.thumb {
+  display: block; width: 108px; margin: 0 auto 12px; padding: 0; border: 0;
+  background: none; color: inherit; font: 12px/1 system-ui, sans-serif; text-align: center; cursor: pointer;
+}
+.thumb canvas { display: block; width: 108px; background: #fff; opacity: 0.75; }
+.thumb span { display: block; margin-top: 8px; }
+.thumb[data-active] canvas { opacity: 1; box-shadow: 0 0 0 6px #8ab4f8; }
 
 #notice {
   position: absolute;
-  top: 36px;
+  top: 56px;
   left: 0;
   right: 0;
-  z-index: 10;
+  z-index: 16;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #d1d9e0;
-  background: Canvas;
+  padding: 8px 16px;
+  background: #202124;
+  color: #e8eaed;
+  color-scheme: dark;
 }
 
 #notice[hidden],
@@ -50,12 +99,20 @@ body {
 /* PDFViewer는 컨테이너가 absolute이기를 요구한다. */
 #viewerContainer {
   position: absolute;
-  top: 36px;
+  top: 56px;
   right: 0;
   bottom: 0;
   left: 0;
   overflow: auto;
+  background: rgb(40, 40, 40);
+  color-scheme: dark;
 }
+
+body[data-sidebar] #viewerContainer { left: 200px; }
+
+/* 크롬처럼 쪽 사이를 좁히고 그림자를 둔다. */
+.pdfViewer { --page-margin: 4px auto 0; --page-border: 0 solid transparent; padding-bottom: 4px; }
+.pdfViewer .page { box-shadow: 0 0 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3); }
 
 /* 링크 클릭을 아래 페이지로 넘긴다 (SPEC 13장 "PDF: 번역문 위의 마우스"). */
 #overlays {
@@ -71,6 +128,7 @@ body {
   position: absolute;
   z-index: 5;
   overflow: hidden;
+  transform-origin: 0 0;
 }
 
 .pdf-block {
