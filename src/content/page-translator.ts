@@ -1,6 +1,6 @@
 import type { RequestGroup, SegmentGroup } from "../shared/messages";
-import { TextReplacer } from "./apply";
-import { collectGroups, collectGroupsAround, type Group } from "./collect";
+import { TextReplacer, type BlockText } from "./apply";
+import { collectGroups, collectGroupsAround, splitWhitespace, type Group } from "./collect";
 
 /**
  * 번역 방법. groups를 번역해 결과가 나오는 대로 deliver()로 넘기고, 모두 끝나면 끝난다.
@@ -65,6 +65,11 @@ export class PageTranslator {
     if (failure) throw failure.error;
   }
 
+  /** 번역문을 보여 주는 노드가 속한 문단의 원문·번역문 (원문 찾기용). 원문 보기 중에는 없다. */
+  blockOf(node: Text): BlockText | undefined {
+    return this.showing === "translation" ? this.replacer.blockOf(node) : undefined;
+  }
+
   /** 원문으로 되돌리고 기억한 번역문을 모두 버린다. 다음 translate()는 처음부터 다시 요청한다 (SPEC 13장 "이 품질로 다시 번역"). */
   async reset(): Promise<void> {
     this.showing = "original";
@@ -89,9 +94,19 @@ export class PageTranslator {
       const group = groups.get(result.id);
       // 세그먼트 개수가 다르면 DOM 구조에 맞춰 넣을 수 없으므로 그 그룹은 원문으로 둔다.
       if (!group || result.segments.length !== group.units.length) continue;
-      group.units.forEach((unit, i) => {
-        this.replacer.remember(unit, withoutRepeatedPunctuation(result.segments[i]!, unit.after));
-      });
+      const translations = group.units.map((unit, i) => withoutRepeatedPunctuation(result.segments[i]!, unit.after));
+      const block: BlockText = {
+        original: collapseSpaces(group.context ?? group.units.map((unit) => unit.value).join("")),
+        translated: collapseSpaces(
+          group.units
+            .map((unit, i) => {
+              const { lead, tail } = splitWhitespace(unit.value);
+              return lead + translations[i]! + tail;
+            })
+            .join(""),
+        ),
+      };
+      group.units.forEach((unit, i) => this.replacer.remember(unit, translations[i]!, block));
     }
   }
 }
@@ -108,6 +123,10 @@ function withoutRepeatedPunctuation(translated: string, after: string): string {
   if (next === undefined || !TRAILING_PUNCTUATION.has(next) || !translated.endsWith(next)) return translated;
   const trimmed = translated.slice(0, -1).trimEnd();
   return trimmed === "" ? translated : trimmed;
+}
+
+function collapseSpaces(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function toRequestGroup(group: Group): RequestGroup {

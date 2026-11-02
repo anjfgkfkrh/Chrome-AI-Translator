@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { runInFrames } from "../../src/content/apply";
+import { runInFrames, TextReplacer, type BlockText } from "../../src/content/apply";
+import { splitWhitespace } from "../../src/content/collect";
 
 /** requestAnimationFrame과 performance.now()를 직접 돌린다. */
 function fakeFrames() {
@@ -65,5 +66,37 @@ describe("runInFrames (7.2, 프레임당 최대 8ms)", () => {
 
     await expect(runInFrames([], () => {})).resolves.toBe(true);
     expect(requestFrame).not.toHaveBeenCalled();
+  });
+});
+
+describe("TextReplacer.blockOf", () => {
+  function setup() {
+    const node = document.createTextNode("  Hello  ");
+    document.body.replaceChildren(node);
+    const { lead, core, tail } = splitWhitespace(node.nodeValue!);
+    const block: BlockText = { original: "Hello", translated: "안녕" };
+    const replacer = new TextReplacer();
+    replacer.remember({ node, value: node.nodeValue!, lead, core, tail, after: "" }, "안녕", block);
+    return { node, block, replacer };
+  }
+
+  it("번역문을 보여 주는 노드에만 값을 돌려준다", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
+    const { node, block, replacer } = setup();
+    expect(replacer.blockOf(node)).toBeUndefined(); // 원문 상태
+
+    await replacer.showTranslations();
+    expect(replacer.blockOf(node)).toBe(block);
+
+    node.nodeValue = "페이지가 바꾼 값"; // 페이지가 값을 바꾼 노드
+    expect(replacer.blockOf(node)).toBeUndefined();
+  });
+
+  it("clear() 뒤에는 undefined다", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
+    const { node, replacer } = setup();
+    await replacer.showTranslations();
+    replacer.clear();
+    expect(replacer.blockOf(node)).toBeUndefined();
   });
 });

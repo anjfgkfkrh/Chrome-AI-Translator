@@ -31,11 +31,21 @@ export function runInFrames<T>(
   });
 }
 
+/** 같은 그룹(문단)의 원문과 번역문. 그룹의 노드는 같은 객체를 공유한다. */
+export interface BlockText {
+  /** group.context가 있으면 그 값, 없으면 unit.value를 이어 공백 정리 */
+  original: string;
+  /** 문단 전체의 번역문 (공백 정리) */
+  translated: string;
+}
+
 interface TextRecord {
   /** 수집할 때의 nodeValue 전체 */
   original: string;
   /** 번역문 (앞뒤 공백 제외) */
   translated: string;
+  /** 노드가 속한 문단의 원문·번역문 (원문 찾기용) */
+  block: BlockText;
 }
 
 /** 번역을 아는 텍스트 노드의 원문과 번역문을 들고, 화면을 원문 또는 번역문으로 바꾼다. */
@@ -46,9 +56,15 @@ export class TextReplacer {
   private generation = 0;
 
   /** 번역 결과를 기억한다. 화면에는 showTranslations()에서 넣는다. */
-  remember(unit: TextUnit, translated: string): void {
-    this.records.set(unit.node, { original: unit.value, translated });
+  remember(unit: TextUnit, translated: string, block: BlockText): void {
+    this.records.set(unit.node, { original: unit.value, translated, block });
     this.nodes.add(unit.node);
+  }
+
+  /** 번역문을 보여 주는 노드가 속한 문단의 원문·번역문. 원문 상태이거나 페이지가 값을 바꾼 노드는 undefined. */
+  blockOf(node: Text): BlockText | undefined {
+    const record = this.records.get(node);
+    return record !== undefined && node.nodeValue === translatedValue(record) ? record.block : undefined;
   }
 
   /** 지금 원문이나 우리가 넣은 번역문을 보여 주는 노드인지. 아니면 다시 수집할 대상이다. */

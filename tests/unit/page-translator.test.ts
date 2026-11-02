@@ -81,6 +81,36 @@ describe("PageTranslator", () => {
     ]);
   });
 
+  it("blockOf: 같은 그룹의 노드는 같은 객체를 돌려주고 original은 그룹 전체다", async () => {
+    loadFixture("sentences.html");
+    const page = new PageTranslator(document.body);
+    await page.translate(uppercaseTranslate);
+
+    const signup = document.getElementById("signup")!;
+    const first = page.blockOf(signup.firstChild as Text);
+    const second = page.blockOf(signup.querySelector("a")!.firstChild as Text);
+
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+    expect(first!.original).toBe("We'll email you a confirmation link to complete sign up.");
+    expect(first!.translated).toBe("WE'LL EMAIL YOU A CONFIRMATION LINK TO COMPLETE SIGN UP.");
+  });
+
+  it("blockOf: context가 있으면 original이 context와 같고, 원문 보기 뒤에는 undefined다", async () => {
+    loadFixture("sentences.html");
+    const page = new PageTranslator(document.body);
+    const { requests, translate } = recordingTranslator();
+    await page.translate(translate);
+
+    const terms = document.getElementById("terms")!;
+    const context = requests[0]!.find((group) => group.context?.startsWith("By continuing"))!.context;
+    const node = terms.querySelector("a")!.firstChild as Text;
+    expect(page.blockOf(node)!.original).toBe(context);
+
+    await page.showOriginal();
+    expect(page.blockOf(node)).toBeUndefined();
+  });
+
   it("화면에 보이는 그룹부터 보낸다 (SPEC 4.5)", async () => {
     document.body.innerHTML = `<p>First in document</p><p id="visible">Visible now</p><p>Last in document</p>`;
     vi.spyOn(document.getElementById("visible")!, "getBoundingClientRect").mockReturnValue({
