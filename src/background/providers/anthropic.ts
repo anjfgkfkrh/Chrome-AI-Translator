@@ -1,10 +1,19 @@
 import { isListedModel, listedModel } from "../../shared/models";
+import type { FindSourceRequest, SourceMatch } from "../../shared/messages";
 import type { TokenUsage } from "../../shared/usage";
 import { errorMessage } from "../errors";
 import { parseResponse, RESPONSE_SCHEMA, systemPrompt, userMessage } from "../prompt";
+import {
+  parseSourceResponse,
+  SOURCE_MAX_TOKENS,
+  SOURCE_RESPONSE_SCHEMA,
+  SOURCE_SYSTEM_PROMPT,
+  sourceUserMessage,
+} from "../source-prompt";
 import { requestJson } from "./http";
 import {
   ProviderError,
+  type FindSourceOptions,
   type ProviderErrorKind,
   type RequestOptions,
   type TranslateOptions,
@@ -59,13 +68,23 @@ export class AnthropicProvider implements TranslationProvider {
     const res = (await postMessages(apiKey, body, signal)) as MessageResponse;
     const usage = toUsage(res.usage);
     if (usage) onUsage?.(usage);
-    if (res.stop_reason === "refusal") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
-    if (res.stop_reason === "max_tokens") throw new ProviderError("truncated", "응답이 max_tokens에서 잘렸습니다.");
-    const text = (res.content ?? [])
-      .filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("");
-    return { groups: parseResponse(text), usage };
+    return { groups: parseResponse(replyText(res)), usage };
+  }
+
+  /** 원문 찾기: 사고를 끄고 짧은 JSON 답을 받는다. 시스템 프롬프트가 짧아 캐시를 표시하지 않는다. */
+  async findSource(req: FindSourceRequest, { apiKey, model, signal, onUsage }: FindSourceOptions): Promise<SourceMatch> {
+    const body = {
+      model,
+      max_tokens: SOURCE_MAX_TOKENS,
+      system: SOURCE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: sourceUserMessage(req) }],
+      thinking: { type: "disabled" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: SOURCE_RESPONSE_SCHEMA } },
+    };
+    const res = (await postMessages(apiKey, body, signal)) as MessageResponse;
+    const usage = toUsage(res.usage);
+    if (usage) onUsage?.(usage);
+    return parseSourceResponse(replyText(res), req.original);
   }
 
   /** 짧은 요청 1회. 재시도하지 않는다 (SPEC 13장). */
@@ -83,6 +102,16 @@ export class AnthropicProvider implements TranslationProvider {
       return { ok: false, message: errorMessage(err, model) };
     }
   }
+}
+
+/** 거절·잘림이면 오류를 던지고, 아니면 응답의 글자를 이어 돌려준다. */
+function replyText(res: MessageResponse): string {
+  if (res.stop_reason === "refusal") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
+  if (res.stop_reason === "max_tokens") throw new ProviderError("truncated", "응답이 max_tokens에서 잘렸습니다.");
+  return (res.content ?? [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text ?? "")
+    .join("");
 }
 
 function postMessages(apiKey: string, body: unknown, signal?: AbortSignal): Promise<unknown> {

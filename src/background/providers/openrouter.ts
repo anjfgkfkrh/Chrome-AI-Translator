@@ -1,10 +1,19 @@
+import type { FindSourceRequest, SourceMatch } from "../../shared/messages";
 import { openRouterModels, type OpenRouterModel } from "../../shared/openrouter-models";
 import type { TokenUsage } from "../../shared/usage";
 import { errorMessage } from "../errors";
 import { parseResponse, RESPONSE_SCHEMA, systemPrompt, userMessage } from "../prompt";
+import {
+  parseSourceResponse,
+  SOURCE_MAX_TOKENS,
+  SOURCE_RESPONSE_SCHEMA,
+  SOURCE_SYSTEM_PROMPT,
+  sourceUserMessage,
+} from "../source-prompt";
 import { requestJson } from "./http";
 import {
   ProviderError,
+  type FindSourceOptions,
   type ProviderErrorKind,
   type RequestOptions,
   type TranslateOptions,
@@ -82,13 +91,37 @@ export class OpenRouterProvider implements TranslationProvider {
     )) as ChatResponse;
     const usage = toUsage(res.usage);
     if (usage) onUsage?.(usage);
-    if (res.error) throw bodyError(res.error);
-    const choice = res.choices?.[0];
-    if (choice?.error) throw bodyError(choice.error);
-    if (choice?.finish_reason === "error") throw new ProviderError("server", "응답을 만드는 중에 실패했습니다.");
-    if (choice?.finish_reason === "length") throw new ProviderError("truncated", "응답이 max_tokens에서 잘렸습니다.");
-    if (choice?.finish_reason === "content_filter") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
-    return { groups: parseResponse(textOf(choice?.message?.content)), usage };
+    return { groups: parseResponse(replyText(res)), usage };
+  }
+
+  /** 원문 찾기: 사고를 끄고 짧은 JSON 답을 받는다. 시스템 프롬프트가 짧아 캐시를 표시하지 않는다. */
+  async findSource(req: FindSourceRequest, { apiKey, model, signal, onUsage }: FindSourceOptions): Promise<SourceMatch> {
+    const info = (await openRouterModels()).get(model);
+    const body: Record<string, unknown> = {
+      model,
+      max_tokens: info?.maxOutput === undefined ? SOURCE_MAX_TOKENS : Math.min(SOURCE_MAX_TOKENS, info.maxOutput),
+      messages: [
+        { role: "system", content: SOURCE_SYSTEM_PROMPT },
+        { role: "user", content: sourceUserMessage(req) },
+      ],
+    };
+    if (info?.structured) {
+      body.response_format = {
+        type: "json_schema",
+        json_schema: { name: "source_lookup", strict: true, schema: SOURCE_RESPONSE_SCHEMA },
+      };
+    }
+    const reasoning = reasoningFor(info, true);
+    if (reasoning) body.reasoning = reasoning;
+
+    const res = (await requestJson(
+      CHAT_URL,
+      { method: "POST", headers: headers(apiKey), body: JSON.stringify(body), signal },
+      classify,
+    )) as ChatResponse;
+    const usage = toUsage(res.usage);
+    if (usage) onUsage?.(usage);
+    return parseSourceResponse(replyText(res), req.original);
   }
 
   /** 토큰을 쓰지 않는다: 키는 키 확인 주소로, 모델 ID는 모델 목록으로 확인한다 (SPEC 13장 "OpenRouter 연결 테스트"). */
@@ -141,6 +174,17 @@ function classify(status: number): ProviderErrorKind {
 function bodyError(error: ErrorBody): ProviderError {
   const status = typeof error.code === "number" ? error.code : 500;
   return new ProviderError(classify(status), error.message ?? `HTTP ${status}`, { status });
+}
+
+/** 응답 안의 오류·거절·잘림이면 오류를 던지고, 아니면 응답의 글자를 돌려준다. */
+function replyText(res: ChatResponse): string {
+  if (res.error) throw bodyError(res.error);
+  const choice = res.choices?.[0];
+  if (choice?.error) throw bodyError(choice.error);
+  if (choice?.finish_reason === "error") throw new ProviderError("server", "응답을 만드는 중에 실패했습니다.");
+  if (choice?.finish_reason === "length") throw new ProviderError("truncated", "응답이 max_tokens에서 잘렸습니다.");
+  if (choice?.finish_reason === "content_filter") throw new ProviderError("refusal", "모델이 번역을 거절했습니다.");
+  return textOf(choice?.message?.content);
 }
 
 function textOf(content: string | { type?: string; text?: string }[] | null | undefined): string {

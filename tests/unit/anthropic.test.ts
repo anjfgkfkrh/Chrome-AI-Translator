@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { RESPONSE_SCHEMA, systemPrompt } from "../../src/background/prompt";
+import {
+  SOURCE_RESPONSE_SCHEMA,
+  SOURCE_SYSTEM_PROMPT,
+  sourceUserMessage,
+} from "../../src/background/source-prompt";
 import { AnthropicProvider } from "../../src/background/providers/anthropic";
 import { ProviderError, type TranslateRequest } from "../../src/background/providers/types";
 import { messageResponse, requestBody } from "../helpers/anthropic-mock";
@@ -22,6 +27,53 @@ function stubFetch(impl: () => Promise<Response>) {
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+
+describe("AnthropicProvider.findSource", () => {
+  const find = { selection: "주의 메커니즘", original: "The attention mechanism works.", translated: "주의 메커니즘이 작동한다." };
+  const answer = '{"kind":"term","text":"attention mechanism"}';
+
+  it("사고를 끄고 스키마를 붙여 캐시 표시 없이 보낸다", async () => {
+    const fetchMock = stubFetch(async () => messageResponse(answer, { usage: { input_tokens: 80, output_tokens: 12 } }));
+    const onUsage = vi.fn();
+
+    expect(await provider.findSource(find, { apiKey, model, onUsage })).toEqual({
+      kind: "term",
+      text: "attention mechanism",
+    });
+
+    expect(requestBody(fetchMock.mock.calls[0]![1])).toEqual({
+      model,
+      max_tokens: 512,
+      system: SOURCE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: sourceUserMessage(find) }],
+      thinking: { type: "disabled" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: SOURCE_RESPONSE_SCHEMA } },
+    });
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 80,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 12,
+    });
+  });
+
+  it.each([
+    ["refusal", "refusal"],
+    ["max_tokens", "truncated"],
+  ])("stop_reason %s → %s 오류. 사용량은 알린다", async (stop, kind) => {
+    stubFetch(async () => messageResponse(answer, { stop_reason: stop }));
+    const onUsage = vi.fn();
+
+    await expect(provider.findSource(find, { apiKey, model, onUsage })).rejects.toMatchObject({ kind });
+    expect(onUsage).toHaveBeenCalledOnce();
+  });
+
+  it("원문에 없는 응답은 format 오류다", async () => {
+    stubFetch(async () => messageResponse('{"kind":"sentence","text":"Not in the source."}'));
+
+    await expect(provider.findSource(find, { apiKey, model })).rejects.toMatchObject({ kind: "format" });
+  });
+});
 
 describe("AnthropicProvider.testConnection", () => {
   it("연결 테스트의 사용량도 알린다 (SPEC 13장 \"사용량에 넣는 응답\")", async () => {

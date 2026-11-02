@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSE_SCHEMA, systemPrompt, userMessage } from "../../src/background/prompt";
+import {
+  SOURCE_RESPONSE_SCHEMA,
+  SOURCE_SYSTEM_PROMPT,
+  sourceUserMessage,
+} from "../../src/background/source-prompt";
 import { OpenRouterProvider } from "../../src/background/providers/openrouter";
 import { ProviderError, type TranslateRequest } from "../../src/background/providers/types";
 import { forgetOpenRouterModels } from "../../src/shared/openrouter-models";
@@ -101,6 +106,63 @@ describe("OpenRouterProvider.translate: 요청", () => {
     expect(body).toMatchObject({ max_tokens: 32_000 });
     expect(body).not.toHaveProperty("response_format");
     expect(body).not.toHaveProperty("reasoning");
+  });
+});
+
+describe("OpenRouterProvider.findSource", () => {
+  const find = { selection: "주의 메커니즘", original: "The attention mechanism works.", translated: "주의 메커니즘이 작동한다." };
+  const answer = '{"kind":"term","text":"attention mechanism"}';
+
+  it("구조화된 출력(source_lookup)과 사고 끔으로 보내고 max_tokens는 512다", async () => {
+    const fetchMock = stubOpenRouter({ chat: () => chatResponse(answer) });
+    const onUsage = vi.fn();
+
+    expect(await provider.findSource(find, { apiKey, model: haiku, onUsage })).toEqual({
+      kind: "term",
+      text: "attention mechanism",
+    });
+
+    expect(chatBody(fetchMock)).toEqual({
+      model: haiku,
+      max_tokens: 512,
+      messages: [
+        { role: "system", content: SOURCE_SYSTEM_PROMPT },
+        { role: "user", content: sourceUserMessage(find) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "source_lookup", strict: true, schema: SOURCE_RESPONSE_SCHEMA },
+      },
+      reasoning: { effort: "none" },
+    });
+    expect(onUsage).toHaveBeenCalledOnce();
+  });
+
+  it("구조화된 출력과 사고 설정을 모르는 모델에는 보내지 않는다", async () => {
+    const fetchMock = stubOpenRouter({ chat: () => chatResponse(answer) });
+
+    await provider.findSource(find, { apiKey, model: "plain/model" });
+
+    const body = chatBody(fetchMock);
+    expect(body).not.toHaveProperty("response_format");
+    expect(body).not.toHaveProperty("reasoning");
+  });
+
+  it.each([
+    ["length", "truncated"],
+    ["content_filter", "refusal"],
+  ])("finish_reason %s → %s 오류. 사용량은 알린다", async (finish, kind) => {
+    stubOpenRouter({ chat: () => chatResponse(answer, { finish_reason: finish }) });
+    const onUsage = vi.fn();
+
+    await expect(provider.findSource(find, { apiKey, model: haiku, onUsage })).rejects.toMatchObject({ kind });
+    expect(onUsage).toHaveBeenCalledOnce();
+  });
+
+  it("원문에 없는 응답은 format 오류다", async () => {
+    stubOpenRouter({ chat: () => chatResponse('{"kind":"term","text":"gradient"}') });
+
+    await expect(provider.findSource(find, { apiKey, model: haiku })).rejects.toMatchObject({ kind: "format" });
   });
 });
 

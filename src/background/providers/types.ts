@@ -1,4 +1,4 @@
-import type { RequestGroup, SegmentGroup } from "../../shared/messages";
+import type { FindSourceRequest, RequestGroup, SegmentGroup, SourceMatch } from "../../shared/messages";
 import type { TokenUsage } from "../../shared/usage";
 
 // 번역 제공업체 인터페이스 (SPEC 5.2). MVP는 AnthropicProvider만 구현한다.
@@ -8,6 +8,8 @@ export interface TranslationProvider {
   translate(req: TranslateRequest, opts: TranslateOptions): Promise<TranslateResponse>;
   /** "빠르게"에서 이 모델의 사고를 실제로 끌 수 있는지. 끌 수 없으면 정확하게로 번역한다 (SPEC 13장). */
   canDisableThinking(model: string): Promise<boolean>;
+  /** 번역문 선택 부분의 원문 용어·문장을 찾는다. 응답이 문단 원문에 없으면 format 오류 (설계 6절). */
+  findSource(req: FindSourceRequest, opts: FindSourceOptions): Promise<SourceMatch>;
   testConnection(opts: RequestOptions): Promise<{ ok: boolean; message?: string }>;
 }
 
@@ -17,6 +19,10 @@ export interface TranslateOptions extends RequestOptions {
   maxTokens: number;
   /** 빠르게: 끌 수 있는 모델이면 사고를 끈다 (SPEC 13장 "번역 방식") */
   fast: boolean;
+}
+
+export interface FindSourceOptions extends RequestOptions {
+  signal?: AbortSignal;
 }
 
 export interface RequestOptions {
