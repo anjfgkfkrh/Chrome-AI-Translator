@@ -124,6 +124,9 @@ body[data-sidebar] #viewerContainer { left: 200px; }
   pointer-events: none;
 }
 
+/* Option을 누른 동안만 번역문이 마우스를 받아 드래그로 선택할 수 있다 (원문 찾기, 설계 8절). */
+#overlays[data-selectable] .pdf-block[data-translated] { pointer-events: auto; }
+
 .pdf-layer {
   position: absolute;
   z-index: 5;

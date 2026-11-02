@@ -22,6 +22,20 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} });
 });
 
+describe("PdfOverlay.setSelectable (원문 찾기)", () => {
+  it("true면 root에 data-selectable을 넣고 false면 뺀다. 두 번 불러도 같다", () => {
+    const { root, overlay } = setup();
+
+    overlay.setSelectable(true);
+    overlay.setSelectable(true);
+    expect(root.hasAttribute("data-selectable")).toBe(true);
+
+    overlay.setSelectable(false);
+    overlay.setSelectable(false);
+    expect(root.hasAttribute("data-selectable")).toBe(false);
+  });
+});
+
 describe("PdfOverlay", () => {
   it("쪽의 문단을 원문 텍스트 노드 하나로 만들고 처음에는 표시하지 않는다", () => {
     const { root, overlay } = setup();

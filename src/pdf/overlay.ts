@@ -58,6 +58,14 @@ export class PdfOverlay {
     this.place();
   }
 
+  /**
+   * Option을 누른 동안만 번역문이 마우스를 받게 한다 (원문 찾기용 드래그 선택). 평소에는 링크 클릭을 아래 페이지로 넘긴다.
+   * 같은 값으로 여러 번 불러도 결과가 같다.
+   */
+  setSelectable(selectable: boolean): void {
+    this.root.toggleAttribute("data-selectable", selectable);
+  }
+
   /** 모든 번역층을 페이지 위치에 맞춘다. 페이지의 투명 테두리는 빼고 안쪽 영역에 맞춘다. */
   place(): void {
     this.root.style.setProperty("--pdf-scale", String(this.viewer.currentScale * CSS_UNITS));

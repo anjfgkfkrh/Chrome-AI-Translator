@@ -64,6 +64,15 @@ const controller = new TranslationController(overlaysElement, {
   pageUrl: () => (source ?? location.href).split(/[?#]/)[0]!,
 });
 
+// Option을 누른 동안만 번역문을 마우스로 선택할 수 있다. 창이 포커스를 잃으면 keyup을 못 받으므로 항상 끈다.
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Alt") overlay.setSelectable(true);
+});
+window.addEventListener("keyup", (event) => {
+  if (event.key === "Alt") overlay.setSelectable(false);
+});
+window.addEventListener("blur", () => overlay.setSelectable(false));
+
 let phase: Phase = { kind: "opening" };
 /** 열린 문서. 열리기 전에는 다운로드와 인쇄가 아무 일도 하지 않는다. */
 let openedPdf: PDFDocumentProxy | undefined;
