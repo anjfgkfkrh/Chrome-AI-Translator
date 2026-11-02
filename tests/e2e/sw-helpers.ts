@@ -56,6 +56,8 @@ export interface MockApiOptions {
   extraSegmentInFirstGroup?: boolean;
   /** 응답의 usage (기본: 입력 1, 출력 1) */
   usage?: Record<string, number>;
+  /** 원문 찾기 요청(시스템 프롬프트가 "A reader of a Korean translation"으로 시작)에 돌려줄 답. "error"면 서버 오류 */
+  findSource?: { kind: "term" | "sentence"; text: string } | "error";
 }
 
 /**
@@ -63,7 +65,7 @@ export interface MockApiOptions {
  * 다시 부르면 동작만 바뀌고, 지금까지의 요청 기록(__apiCalls)은 이어진다.
  */
 export async function mockTranslationApi(serviceWorker: Worker, options: MockApiOptions = {}): Promise<void> {
-  await serviceWorker.evaluate(({ hang, gated, networkError, error, invalidJson, extraSegmentInFirstGroup, usage }) => {
+  await serviceWorker.evaluate(({ hang, gated, networkError, error, invalidJson, extraSegmentInFirstGroup, usage, findSource }) => {
     const scope = globalThis as unknown as { __apiCalls?: ApiCall[] };
     const calls = scope.__apiCalls ?? [];
     let release = () => {};
@@ -86,6 +88,12 @@ export async function mockTranslationApi(serviceWorker: Worker, options: MockApi
       __releaseApi: release,
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         calls.push({ url: String(input), headers: init?.headers, body: String(init?.body) });
+        if (findSource !== undefined) {
+          const { system } = JSON.parse(String(init?.body));
+          if (typeof system === "string" && system.startsWith("A reader of a Korean translation")) {
+            return findSource === "error" ? new Response("{}", { status: 500 }) : message(JSON.stringify(findSource));
+          }
+        }
         if (networkError) throw new TypeError("Failed to fetch");
         if (error && (error.times === undefined || errors < error.times)) {
           errors++;
@@ -122,6 +130,12 @@ export async function mockTranslationApi(serviceWorker: Worker, options: MockApi
       },
     });
   }, options);
+}
+
+/** 찾기 요청만 센다 (시스템 프롬프트가 문자열인 요청). 번역 요청의 system은 배열이다. */
+export async function findSourceCalls(serviceWorker: Worker): Promise<ApiCall[]> {
+  const calls = await apiCalls(serviceWorker);
+  return calls.filter((call) => typeof JSON.parse(call.body).system === "string");
 }
 
 /** gated 목 API의 미뤄 둔 응답을 보낸다. */
