@@ -1,7 +1,7 @@
 import { UI_ATTRIBUTE } from "./collect";
 
 // 페이지 오른쪽 아래의 작은 알림 (SPEC 4.11, 13장 "토스트 동작").
-// 페이지 DOM에 더하는 것은 이 알림 하나뿐이다. Shadow DOM 안에 그려 페이지 스타일과 섞이지 않게 한다.
+// 페이지 DOM에 더하는 것은 이 알림과 원문 찾기 라벨(lookup-popup.ts)뿐이다. Shadow DOM 안에 그려 페이지 스타일과 섞이지 않게 한다.
 
 const AUTO_CLOSE_MS = 8_000;
 
