@@ -411,6 +411,78 @@ describe("팝업 메시지", () => {
   });
 });
 
+describe("원문 찾기 (설계 6절)", () => {
+  const find = {
+    type: "find-source",
+    selection: "주의 메커니즘",
+    original: "The attention mechanism works.",
+    translated: "주의 메커니즘이 작동한다.",
+  };
+  const answer = '{"kind":"term","text":"attention mechanism"}';
+
+  function stubAnswer(text = answer) {
+    const fetchMock = vi.fn<typeof fetch>(async () => messageResponse(text, { usage: { input_tokens: 70, output_tokens: 9 } }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("탭에서 온 메시지는 제공업체 기본 모델(Haiku)로 찾는다. 설정 모델이 Opus여도 같다", async () => {
+    saveKey();
+    chromeMock.storage.settings = { apiKeys: { anthropic: "sk-ant-saved" }, model: "claude-opus-5-5" };
+    const fetchMock = stubAnswer();
+
+    expect(await ask(find, contentScript)).toEqual({ kind: "term", text: "attention mechanism" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(requestBody(fetchMock.mock.calls[0]![1]).model).toBe("claude-haiku-5-5");
+  });
+
+  it("사용량은 더하고 번역 기록은 쓰지 않는다. 키는 메시지와 응답에 없다", async () => {
+    saveKey();
+    const fetchMock = stubAnswer();
+
+    const response = await ask(find, contentScript);
+
+    await vi.waitFor(() => expect(chromeMock.storage.usage).toMatchObject({ inputTokens: 70, outputTokens: 9 }));
+    expect(Object.keys(chromeMock.storage).filter((key) => key.includes("log"))).toEqual([]);
+    expect(JSON.stringify(find)).not.toContain("sk-ant");
+    expect(JSON.stringify(response)).not.toContain("sk-ant");
+    expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain("sk-ant");
+  });
+
+  it.each([
+    ["탭이 아닌 곳", find, popup],
+    ["문자열이 아닌 값", { ...find, original: 1 }, contentScript],
+    ["빈 선택", { ...find, selection: "  " }, contentScript],
+    ["60자 초과 선택", { ...find, selection: "a".repeat(61) }, contentScript],
+    ["20,000자 초과 원문", { ...find, original: "a".repeat(20_001) }, contentScript],
+    ["20,000자 초과 번역문", { ...find, translated: "가".repeat(20_001) }, contentScript],
+  ])("%s는 호출 없이 failed다", async (_name, message, sender) => {
+    saveKey();
+    const fetchMock = stubAnswer();
+
+    expect(await ask(message, sender)).toEqual({ kind: "failed" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("키가 없으면 failed다", async () => {
+    const fetchMock = stubAnswer();
+
+    expect(await ask(find, contentScript)).toEqual({ kind: "failed" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("제공업체 오류나 원문에 없는 응답은 failed다", async () => {
+    saveKey();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response("{}", { status: 500 })));
+    expect(await ask(find, contentScript)).toEqual({ kind: "failed" });
+
+    stubAnswer('{"kind":"term","text":"gradient"}');
+    expect(await ask(find, contentScript)).toEqual({ kind: "failed" });
+  });
+});
+
 describe("사이트별 자동 번역 (SPEC 4.8, 13장)", () => {
   const origin = "https://docs.example.com";
   const registeredScript = {

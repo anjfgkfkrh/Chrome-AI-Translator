@@ -3,6 +3,8 @@ import {
   type BackgroundToContent,
   type ContentCommand,
   type ContentToBackground,
+  type FindSourceRequest,
+  type FindSourceResult,
   type LogInfo,
   type Message,
   type PageState,
@@ -11,10 +13,11 @@ import {
   type TabState,
   type TestConnectionResult,
 } from "../shared/messages";
-import { isProviderId, providerInfo, type ProviderId } from "../shared/models";
+import { DEFAULT_MODELS, isProviderId, providerInfo, type ProviderId } from "../shared/models";
 import { openRouterModelIds } from "../shared/openrouter-models";
 import { isLocalPdfUrl, isViewerUrl, viewerUrl } from "../shared/pdf";
 import { originPattern } from "../shared/sites";
+import { MAX_BLOCK_LENGTH, MAX_SELECTION_LENGTH } from "../shared/source-text";
 import { activeApiKey, getSettings } from "../shared/storage";
 import { clearTranslationLog } from "../shared/translation-log";
 import { recordUsage, type TokenUsage } from "../shared/usage";
@@ -121,6 +124,10 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
   if (message?.type === "open-options") {
     void chrome.runtime.openOptionsPage();
     return false;
+  }
+  // 번역문 Option+드래그의 원문 찾기: 콘텐츠 스크립트가 보낸다 (설계 6절)
+  if (message?.type === "find-source") {
+    return respond(findSource(message, sender));
   }
   // 아래 메시지는 키를 담거나 다른 탭을 조작하므로 확장 프로그램 페이지(옵션·팝업)에서 온 것만 받는다.
   if (!isExtensionPage(sender)) return false;
@@ -264,6 +271,46 @@ async function testConnection(provider: unknown, apiKey: string, model: string):
   const id: ProviderId = isProviderId(provider) ? provider : "anthropic";
   const savedModel = (await getSettings()).models[id];
   return providers[id].testConnection({ apiKey, model: model || savedModel, onUsage: saveUsage });
+}
+
+const FIND_SOURCE_TIMEOUT_MS = 15_000;
+const FAILED: FindSourceResult = { kind: "failed" };
+
+/**
+ * 선택한 번역문의 원문을 찾는다. 설정의 품질·모델과 상관없이 제공업체의 기본 모델(Haiku)을 쓰고,
+ * 재시도하지 않으며 번역 기록에는 남기지 않는다. 사용량만 더한다. 실패는 모두 failed로 돌려준다.
+ */
+async function findSource(message: FindSourceRequest, sender: chrome.runtime.MessageSender): Promise<FindSourceResult> {
+  const { selection, original, translated } = message;
+  if (
+    sender.tab === undefined ||
+    typeof selection !== "string" ||
+    typeof original !== "string" ||
+    typeof translated !== "string" ||
+    selection.trim().length === 0 ||
+    selection.trim().length > MAX_SELECTION_LENGTH ||
+    original.length > MAX_BLOCK_LENGTH ||
+    translated.length > MAX_BLOCK_LENGTH
+  ) {
+    return FAILED;
+  }
+  const settings = await getSettings();
+  const apiKey = activeApiKey(settings);
+  if (!apiKey) return FAILED;
+  try {
+    return await providers[settings.provider].findSource(
+      { selection, original, translated },
+      {
+        apiKey,
+        model: DEFAULT_MODELS[settings.provider],
+        signal: AbortSignal.timeout(FIND_SOURCE_TIMEOUT_MS),
+        onUsage: saveUsage,
+      },
+    );
+  } catch (err) {
+    console.warn("[AITranslator] 원문을 찾지 못했습니다.", err instanceof Error ? err.message : err);
+    return FAILED;
+  }
 }
 
 /** 캐시 상한·정리 기준을 바꾼 뒤 지금 설정으로 바로 정리한다 (SPEC 13장 "상한을 지금 사용량보다 낮추면"). */
