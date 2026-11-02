@@ -66,7 +66,24 @@ export type Message =
   | { type: "take-auto-translate-denied"; origin: string }
   | { type: "set-auto-translate"; origin: string; enabled: boolean; tabId?: number }
   // 콘텐츠 스크립트의 알림에서 "설정 열기"를 눌렀을 때 (콘텐츠 스크립트는 옵션 페이지를 직접 열 수 없다)
-  | { type: "open-options" };
+  | { type: "open-options" }
+  // 번역문을 Option+드래그했을 때 원문 찾기 (콘텐츠 스크립트가 보낸다)
+  | ({ type: "find-source" } & FindSourceRequest);
+
+/** 원문 찾기 요청: 선택한 번역문, 그 문단의 원문과 번역문 */
+export interface FindSourceRequest {
+  selection: string;
+  original: string;
+  translated: string;
+}
+
+/** 찾은 원문: 용어(term) 또는 문장(sentence) */
+export interface SourceMatch {
+  kind: "term" | "sentence";
+  text: string;
+}
+
+export type FindSourceResult = SourceMatch | { kind: "failed" };
 
 export interface TestConnectionResult {
   ok: boolean;
@@ -93,6 +110,7 @@ interface Responses {
   /** 바뀐 뒤의 상태. 켜려 했지만 권한이 없으면 false */
   "set-auto-translate": boolean;
   "open-options": void;
+  "find-source": FindSourceResult;
 }
 
 export function sendMessage<M extends Message>(message: M): Promise<Responses[M["type"]]> {

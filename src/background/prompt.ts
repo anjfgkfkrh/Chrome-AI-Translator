@@ -140,7 +140,7 @@ function omittedTexts(group: RequestGroup): Set<string> {
   return omitted;
 }
 
-function stripCodeFence(text: string): string {
+export function stripCodeFence(text: string): string {
   const fenced = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/.exec(text);
   return fenced ? fenced[1]! : text;
 }
