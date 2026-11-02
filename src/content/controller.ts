@@ -7,6 +7,7 @@ import {
   type RequestGroup,
   type SegmentGroup,
 } from "../shared/messages";
+import { TermLookup } from "./lookup";
 import { MutationWatcher } from "./observer";
 import { PageTranslator } from "./page-translator";
 import { showToast } from "./toast";
@@ -31,6 +32,8 @@ class TranslationError extends Error {
 export class TranslationController {
   private readonly page: PageTranslator;
   private readonly watcher: MutationWatcher;
+  /** 번역문 Option+드래그로 원문 찾기 (웹과 PDF 뷰어가 이 클래스를 쓰므로 같은 경로다) */
+  private readonly lookup: TermLookup;
   private started = false;
   private running = 0;
   private progress = { done: 0, total: 0 };
@@ -54,6 +57,7 @@ export class TranslationController {
   constructor(root: Element, options: { pageUrl?: () => string } = {}) {
     this.pageUrl = options.pageUrl ?? locationUrl;
     this.page = new PageTranslator(root);
+    this.lookup = new TermLookup(this.page);
     this.watcher = new MutationWatcher(
       root,
       (nodes) => void this.translateChanges(nodes),
@@ -88,6 +92,7 @@ export class TranslationController {
    */
   async retranslate(): Promise<void> {
     if (this.running > 0) return;
+    this.lookup.close();
     this.watcher.stop();
     await this.page.reset();
     this.hasTranslations = false;
@@ -98,12 +103,14 @@ export class TranslationController {
 
   /** 원문 보기 (API 호출 없음). 원문 보기 상태에서는 새 텍스트를 번역하지 않는다 (SPEC 4.6). */
   showOriginal(): Promise<void> {
+    this.lookup.close();
     this.watcher.stop();
     return this.page.showOriginal();
   }
 
   /** 감시를 멈추고 페이지에서 손을 뗀다. */
   dispose(): void {
+    this.lookup.dispose();
     this.watcher.stop();
   }
 

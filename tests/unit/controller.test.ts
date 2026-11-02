@@ -42,6 +42,71 @@ function toastRoot(): ShadowRoot | null | undefined {
   return document.querySelector("aitranslator-toast")?.shadowRoot;
 }
 
+describe("TranslationController: 원문 찾기 (설계 4·7절)", () => {
+  Range.prototype.getBoundingClientRect = () =>
+    ({ left: 10, top: 100, width: 40, bottom: 120, right: 50, height: 20, x: 10, y: 100 }) as DOMRect;
+
+  const lookupLabel = () => document.querySelector("aitranslator-lookup");
+
+  /** 번역을 마치고 번역문 "HELLO WORLD"를 Option+드래그한 상태로 만든다. */
+  async function translatedAndSelected() {
+    document.body.innerHTML = "<p>Hello world</p>";
+    const controller = newController();
+    const translating = controller.translate();
+    ports[0]!.receive({ type: "results", groups: uppercase(requested()) });
+    ports[0]!.receive({ type: "done", failed: 0 });
+    await translating;
+    const node = document.querySelector("p")!.firstChild as Text;
+    const select = () => {
+      document.getSelection()!.setBaseAndExtent(node, 0, node, 5);
+      document.dispatchEvent(new MouseEvent("mouseup", { altKey: true, bubbles: true }));
+    };
+    return { controller, select };
+  }
+
+  it("번역 전에는 찾지 않는다", () => {
+    document.body.innerHTML = "<p>Hello world</p>";
+    newController();
+    const node = document.querySelector("p")!.firstChild as Text;
+    document.getSelection()!.setBaseAndExtent(node, 0, node, 5);
+    document.dispatchEvent(new MouseEvent("mouseup", { altKey: true, bubbles: true }));
+
+    expect(lookupLabel()).toBeNull();
+    expect(chromeMock.runtimeSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("번역문을 Option+드래그하면 라벨이 뜨고, 원문 보기로 바꾸면 닫힌다", async () => {
+    const { controller, select } = await translatedAndSelected();
+    select();
+    expect(lookupLabel()).not.toBeNull();
+    expect(chromeMock.runtimeSendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "find-source", selection: "HELLO", original: "Hello world" }),
+    );
+
+    await controller.showOriginal();
+    expect(lookupLabel()).toBeNull();
+  });
+
+  it("다시 번역하면 닫힌다", async () => {
+    const { controller, select } = await translatedAndSelected();
+    select();
+    expect(lookupLabel()).not.toBeNull();
+
+    await controller.retranslate();
+    expect(lookupLabel()).toBeNull();
+  });
+
+  it("dispose()하면 닫히고 더 찾지 않는다", async () => {
+    const { controller, select } = await translatedAndSelected();
+    select();
+    controller.dispose();
+    expect(lookupLabel()).toBeNull();
+
+    select();
+    expect(lookupLabel()).toBeNull();
+  });
+});
+
 describe("TranslationController (SPEC 4.5, 4.9)", () => {
   it("처음에는 대기 상태다", () => {
     document.body.innerHTML = "<p>Hello</p>";
